@@ -1,0 +1,19 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
+    "ServiceBusQueueName": "catalyst-indexing-queue",
+    "ServiceBusConnection": "Endpoint=sb://catalyst-poc.servicebus.windows.net/;SharedAccessKeyName=fullaccess;SharedAccessKey=6F2sU+6LIGMbmB+e7qSI4RFYLAOrXUi6h+ASbHYtWdU=",
+    "CrawlIndexSchedule": "0 0 * * *",
+    "SitemapsRootUrl": "https://www.catalyst.org/sitemap_index.xml",
+    "SearchServiceEndpoint": "https://xccomaisearch.search.windows.net",
+    "SearchIndexName": "catalyst-az-poc",
+    "SearchApiKey": "yrQnhlo42h8Nq5tK7alHcucdUskKb2FDtnx32ssLlsAzSeBOWnoA",
+    "CrawlerUserAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "pageContentExpression": "",
+    "CrawlerMaxConcurrency": 3,
+    "CrawlerMaxRetries": 3
+
+  }
+}
