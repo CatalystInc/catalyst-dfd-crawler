@@ -2,104 +2,139 @@
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using System;
 using System.Text.Json;
+using System.Threading.Tasks;
 
-public class PageCrawlerQueue : PageCrawlerBase
+namespace AzureSearchCrawler
 {
-	private readonly string _queueName;
-	private readonly ServiceBusClient _serviceBusClient;
-	public PageCrawlerQueue(IConfiguration configuration, ILoggerFactory loggerFactory) : base(configuration, loggerFactory)
+	/// <summary>
+	/// Processes crawl requests from an Azure Service Bus queue.
+	/// </summary>
+	public class PageCrawlerQueue : PageCrawlerBase, IAsyncDisposable
 	{
-		_queueName = configuration["ServiceBusQueueName"];
-		var serviceBusConnection = configuration["ServiceBusConnection"];
+		private readonly string _queueName;
+		private readonly ServiceBusClient _serviceBusClient;
+		private readonly JsonSerializerOptions _jsonOptions;
 
-		if (string.IsNullOrEmpty(_queueName))
+		/// <summary>
+		/// Initializes a new instance of the <see cref="PageCrawlerQueue"/> class.
+		/// </summary>
+		/// <param name="configuration">The configuration.</param>
+		/// <param name="loggerFactory">The logger factory.</param>
+		/// <exception cref="ArgumentNullException">Thrown when required configuration is missing.</exception>
+		public PageCrawlerQueue(IConfiguration configuration, ILoggerFactory loggerFactory)
+			: base(configuration, loggerFactory)
 		{
-			throw new ArgumentNullException(nameof(_queueName), "ServiceBusQueueName configuration is missing");
+			_queueName = configuration["ServiceBusQueueName"]
+				?? throw new ArgumentNullException(nameof(configuration), "ServiceBusQueueName configuration is missing");
+
+			var serviceBusConnection = configuration["ServiceBusConnection"]
+				?? throw new ArgumentNullException(nameof(configuration), "ServiceBusConnection configuration is missing");
+
+			_serviceBusClient = new ServiceBusClient(serviceBusConnection);
+
+			_jsonOptions = new JsonSerializerOptions
+			{
+				PropertyNameCaseInsensitive = true,
+				PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+			};
+
+			_logger.LogInformation("PageCrawlerQueue initialized with queue: {QueueName}", _queueName);
 		}
-		if (string.IsNullOrEmpty(serviceBusConnection))
+
+		/// <summary>
+		/// Processes messages from the Service Bus queue.
+		/// </summary>
+		/// <param name="triggerMessage">The trigger message.</param>
+		/// <param name="triggerMessageActions">Actions for the trigger message.</param>
+		/// <param name="cancellationToken">The cancellation token.</param>
+		[Function("PageCrawlerQueue")]
+		public async Task RunAsync(
+			[ServiceBusTrigger("%ServiceBusQueueName%", Connection = "ServiceBusConnection")]
+			ServiceBusReceivedMessage triggerMessage,
+			ServiceBusMessageActions triggerMessageActions,
+			CancellationToken cancellationToken)
 		{
-			throw new ArgumentNullException("ServiceBusConnection", "ServiceBusConnection configuration is missing");
+			_logger.LogInformation("CrawlPagesServiceBus function triggered. Processing messages...");
+
+			await using var receiver = _serviceBusClient.CreateReceiver(_queueName);
+			try
+			{
+				// Process the trigger message
+				if (triggerMessage?.Body is not null)
+				{
+					await ProcessMessageAsync(triggerMessage, receiver, cancellationToken);
+				}
+				else
+				{
+					_logger.LogWarning("Trigger message was null or empty.");
+				}
+
+				// Process remaining messages
+				await ProcessRemainingMessagesAsync(receiver, cancellationToken);
+			}
+			catch (Exception ex)
+			{
+				_logger.LogError(ex, "Error in message processing");
+				if (triggerMessage is not null)
+				{
+					await triggerMessageActions.AbandonMessageAsync(triggerMessage);
+				}
+				// Consider implementing a circuit breaker or backoff strategy here
+			}
 		}
-		_serviceBusClient = new ServiceBusClient(serviceBusConnection);
-	}
 
-	[Function("PageCrawlerQueue")]
-	public async Task Run([ServiceBusTrigger("%ServiceBusQueueName%", Connection = "ServiceBusConnection")] ServiceBusReceivedMessage triggerMessage,
-		ServiceBusMessageActions triggerMessageActions)
-	{
-		_logger.LogInformation("CrawlPagesServiceBus function triggered. Processing messages...");
-		await using var receiver = _serviceBusClient.CreateReceiver(_queueName);
-
-		try
+		private async Task ProcessRemainingMessagesAsync(ServiceBusReceiver receiver, CancellationToken cancellationToken)
 		{
-			// Process the trigger message
-			if (triggerMessage?.Body != null)
+			while (!cancellationToken.IsCancellationRequested)
 			{
-				await ProcessMessage(triggerMessage, receiver);
-				//await triggerMessageActions.CompleteMessageAsync(triggerMessage);
-			}
-			else
-			{
-				_logger.LogWarning("Trigger message was null or empty.");
-			}
-
-			// Check for and process any remaining messages
-			while (true)
-			{
-				var message = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(5));
-				if (message == null)
+				var message = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(5), cancellationToken);
+				if (message is null)
 				{
 					_logger.LogInformation("No more messages in the queue. Exiting.");
 					break;
 				}
-
-				await ProcessMessage(message, receiver);
+				await ProcessMessageAsync(message, receiver, cancellationToken);
 			}
 		}
-		catch (Exception ex)
+
+		private async Task ProcessMessageAsync(ServiceBusReceivedMessage message, ServiceBusReceiver receiver, CancellationToken cancellationToken)
 		{
-			_logger.LogError($"Error in message processing: {ex.Message}");
-			if (triggerMessage != null)
+			_logger.LogInformation("Processing message: {MessageId}", message.MessageId);
+			try
 			{
-				await triggerMessageActions.AbandonMessageAsync(triggerMessage);
+				var crawlRequest = await JsonSerializer.DeserializeAsync<CrawlRequest>(
+					new MemoryStream(message.Body.ToArray()), _jsonOptions, cancellationToken);
+
+				if (crawlRequest is null)
+				{
+					throw new JsonException("Failed to deserialize CrawlRequest");
+				}
+
+				await CrawlPagesAsync(crawlRequest);
+				_logger.LogInformation("Message {MessageId} processed and removed from the queue", message.MessageId);
+				await receiver.CompleteMessageAsync(message, cancellationToken);
 			}
-			// Consider implementing a circuit breaker or backoff strategy here
+			catch (JsonException ex)
+			{
+				_logger.LogError(ex, "Error parsing JSON for message {MessageId}", message.MessageId);
+				await receiver.AbandonMessageAsync(message);
+			}
+			catch (Exception ex)
+			{
+				_logger.LogError(ex, "Error processing message {MessageId}", message.MessageId);
+				await receiver.AbandonMessageAsync(message);
+			}
 		}
-	}
 
-
-	private async Task ProcessMessage(ServiceBusReceivedMessage message, ServiceBusReceiver receiver)
-	{
-		_logger.LogInformation("Processing message: {MessageId}", message.MessageId);
-
-		try
+		/// <summary>
+		/// Asynchronously releases the unmanaged resources used by the PageCrawlerQueue.
+		/// </summary>
+		public async ValueTask DisposeAsync()
 		{
-			var jsonDocument = JsonDocument.Parse(message.Body.ToString());
-			//var crawlRequest = JsonSerializer.Deserialize<CrawlRequest>(jsonDocument);
-			//var crawlRequest = jsonDocument.RootElement.Deserialize<CrawlRequest>();
-			var crawlRequest = JsonSerializer.Deserialize<CrawlRequest>(jsonDocument, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-
-			await CrawlPages(crawlRequest);
-			_logger.LogInformation("Message {MessageId} processed and removed from the queue", message.MessageId);
-			await receiver.CompleteMessageAsync(message);
-			return;
-		}
-		catch (JsonException ex)
-		{
-			_logger.LogError($"Error parsing JSON: {ex.Message}");
-			// Abandon the message so it can be processed again
-			await receiver.AbandonMessageAsync(message);
-			_logger.LogWarning("Message {MessageId} abandoned due to JSON parsing error", message.MessageId);
-		}
-		catch (Exception ex)
-		{
-			_logger.LogError($"Error processing message: {ex.Message}");
-			// Abandon the message so it can be processed again
-			await receiver.AbandonMessageAsync(message);
-			_logger.LogWarning("Message {MessageId} abandoned due to processing error", message.MessageId);
+			await _serviceBusClient.DisposeAsync();
+			GC.SuppressFinalize(this);
 		}
 	}
 }
-
-
