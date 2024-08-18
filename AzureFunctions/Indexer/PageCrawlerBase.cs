@@ -5,12 +5,15 @@ using AzureSearchCrawler;
 using HtmlAgilityPack;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using System;
 using System.Collections.Concurrent;
+using System.Collections.Specialized;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
-namespace AzureSearchCrawler
+namespace AzureFunctions.Indexer
 {
 	/// <summary>
 	/// Base class for crawling web pages and indexing their content in Azure Search.
@@ -23,6 +26,7 @@ namespace AzureSearchCrawler
 		private readonly int _maxRetries;
 		internal readonly SearchClient _searchClient;
 		private readonly TextExtractor _textExtractor;
+		List<MetaTagConfig> _metaFieldMappings;
 
 		/// <summary>
 		/// Initializes a new instance of the <see cref="PageCrawlerBase"/> class.
@@ -55,9 +59,10 @@ namespace AzureSearchCrawler
 
 			_textExtractor = new TextExtractor(loggerFactory);
 
+			_metaFieldMappings = configuration.GetSection("MetaFieldMappings").Get<List<MetaTagConfig>>();
+
 			_logger.LogInformation("Page Crawler initialized with User-Agent: {UserAgent}, MaxConcurrency: {MaxConcurrency}, MaxRetries: {MaxRetries}",
 				userAgent, _maxConcurrency, _maxRetries);
-
 		}
 
 		/// <summary>
@@ -65,9 +70,9 @@ namespace AzureSearchCrawler
 		/// </summary>
 		/// <param name="url">The URL to crawl.</param>
 		/// <param name="source">The source of the URL.</param>
-		/// <returns>A task that represents the asynchronous operation. The task result contains the page information.</returns>
+		/// <returns>A task that represents the asynchronous operation. The task result contains the search document.</returns>
 		/// <exception cref="ArgumentNullException">Thrown when url or source is null.</exception>
-		public async Task<PageInfo> CrawlPageAsync(string url, string source)
+		public async Task<SearchDocument> CrawlPageAsync(string url, string source)
 		{
 			ArgumentNullException.ThrowIfNull(url);
 			ArgumentNullException.ThrowIfNull(source);
@@ -84,16 +89,34 @@ namespace AzureSearchCrawler
 				doc.LoadHtml(html);
 
 				var pageContent = _textExtractor.ExtractPageContent(doc);
+				var metaTags = ExtractMetaTags(doc);
 
-				return new PageInfo
+				string uniqueId = GenerateUrlUniqueId(url);
+
+				var searchDocument = new SearchDocument
 				{
-					Url = url,
-					Title = pageContent.Title,
-					MetaTags = JsonSerializer.Serialize(ExtractMetaTags(doc)),
-					HtmlContent = pageContent.HtmlContent,
-					TextContent = pageContent.TextContent,
-					Source = source
+					["id"] = uniqueId,
+					["url"] = url,
+					["title"] = pageContent.Title,
+					["metaTags"] = JsonSerializer.Serialize(metaTags),
+					["htmlContent"] = pageContent.HtmlContent,
+					["textContent"] = pageContent.TextContent,
+					["source"] = source
 				};
+
+				// Process configured meta tags
+				foreach (var config in _metaFieldMappings)
+				{
+					if (metaTags.TryGetValue(config.SourceMetaTag, out string metaValue))
+					{
+						if (TryConvertMetaValue(metaValue, config.TargetType, out object convertedValue))
+						{
+							searchDocument[config.TargetField] = convertedValue;
+						}
+					}
+				}
+
+				return searchDocument;
 			}
 			catch (HttpRequestException ex)
 			{
@@ -123,15 +146,15 @@ namespace AzureSearchCrawler
 				return;
 			}
 
-			var results = new ConcurrentBag<PageInfo>();
+			var results = new ConcurrentBag<SearchDocument>();
 
 			await Parallel.ForEachAsync(crawlRequest.Urls,
 				new ParallelOptions { MaxDegreeOfParallelism = _maxConcurrency },
 				async (url, ct) =>
 				{
-					var pageInfo = await ProcessUrlWithRetryAsync(url, crawlRequest.Source, ct);
+					var searchDocument = await ProcessUrlWithRetryAsync(url, crawlRequest.Source, ct);
 					await Task.Delay(100, ct); // Slow down to prevent rate limiting
-					results.Add(pageInfo);
+					results.Add(searchDocument);
 				});
 
 			_logger.LogInformation("Crawled {Count} pages from source {Source}", results.Count, crawlRequest.Source);
@@ -171,45 +194,30 @@ namespace AzureSearchCrawler
 				.TrimEnd('=');
 		}
 
-		private async Task IndexPageInfoAsync(PageInfo pageInfo, CancellationToken cancellationToken)
+		private async Task IndexSearchDocumentAsync(SearchDocument document, CancellationToken cancellationToken)
 		{
-			ArgumentNullException.ThrowIfNull(pageInfo);
-
-			string uniqueId = GenerateUrlUniqueId(pageInfo.Url);
-
-			var document = new SearchDocument
-			{
-				["id"] = uniqueId,
-				["url"] = pageInfo.Url,
-				["title"] = pageInfo.Title,
-				["metaTags"] = pageInfo.MetaTags,
-				["htmlContent"] = pageInfo.HtmlContent,
-				["textContent"] = pageInfo.TextContent,
-				["source"] = pageInfo.Source
-			};
-
 			try
 			{
 				await _searchClient.MergeOrUploadDocumentsAsync(new[] { document }, cancellationToken: cancellationToken);
 				_logger.LogInformation("Indexed document for {Url} with ID: {UniqueId} from source: {Source}",
-					pageInfo.Url, uniqueId, pageInfo.Source);
+					document["url"], document["id"], document["source"]);
 			}
 			catch (Exception ex)
 			{
-				_logger.LogError(ex, "Error indexing document for {Url}", pageInfo.Url);
+				_logger.LogError(ex, "Error indexing document for {Url}", document["url"]);
 				throw;
 			}
 		}
 
-		private async Task<PageInfo> ProcessUrlWithRetryAsync(string url, string source, CancellationToken cancellationToken)
+		private async Task<SearchDocument> ProcessUrlWithRetryAsync(string url, string source, CancellationToken cancellationToken)
 		{
 			for (int attempt = 1; attempt <= _maxRetries; attempt++)
 			{
 				try
 				{
-					var pageInfo = await CrawlPageAsync(url, source);
-					await IndexPageInfoAsync(pageInfo, cancellationToken);
-					return pageInfo;
+					var searchDocument = await CrawlPageAsync(url, source);
+					await IndexSearchDocumentAsync(searchDocument, cancellationToken);
+					return searchDocument;
 				}
 				catch (Exception ex) when (ex is not OperationCanceledException)
 				{
@@ -217,13 +225,105 @@ namespace AzureSearchCrawler
 					if (attempt == _maxRetries)
 					{
 						_logger.LogError(ex, "Failed to process {Url} after {MaxRetries} attempts", url, _maxRetries);
-						return new PageInfo { Url = url, Error = ex.Message, Source = source };
+						return new SearchDocument
+						{
+							["id"] = GenerateUrlUniqueId(url),
+							["url"] = url,
+							["error"] = ex.Message,
+							["source"] = source
+						};
 					}
 					await Task.Delay(1000 * attempt, cancellationToken); // Exponential backoff
 				}
 			}
 
-			return new PageInfo { Url = url, Error = "Unexpected error", Source = source };
+			return new SearchDocument
+			{
+				["id"] = GenerateUrlUniqueId(url),
+				["url"] = url,
+				["error"] = "Unexpected error",
+				["source"] = source
+			};
 		}
+
+		private bool TryConvertMetaValue(string value, string targetType, out object result)
+		{
+			result = null;
+			try
+			{
+				switch (targetType.ToLower())
+				{
+					case "string":
+						result = value;
+						return true;
+					case "int32":
+					case "int":
+						if (int.TryParse(value, out int intResult))
+						{
+							result = intResult;
+							return true;
+						}
+						break;
+					case "int64":
+						if (long.TryParse(value, out long longResult))
+						{
+							result = longResult;
+							return true;
+						}
+						break;
+					case "double":
+						if (double.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out double doubleResult))
+						{
+							result = doubleResult;
+							return true;
+						}
+						break;
+					case "boolean":
+						if (bool.TryParse(value, out bool boolResult))
+						{
+							result = boolResult;
+							return true;
+						}
+						break;
+					case "datetimeoffset":
+						if (DateTimeOffset.TryParse(value, out DateTimeOffset dateTimeOffsetResult))
+						{
+							result = dateTimeOffsetResult;
+							return true;
+						}
+						break;
+					case "datetime":
+						if (DateTime.TryParse(value, out DateTime dateTimeResult))
+						{
+							result = result = new DateTimeOffset(dateTimeResult.ToUniversalTime(), TimeSpan.Zero);
+							return true;
+						}
+						break;
+					case "geography":
+						// For simplicity, we'll assume the geography is in the format "lat,lon"
+						var coordinates = value.Split(',');
+						if (coordinates.Length == 2 &&
+							double.TryParse(coordinates[0], out double lat) &&
+							double.TryParse(coordinates[1], out double lon))
+						{
+							result = $"POINT({lon} {lat})";
+							return true;
+						}
+						break;
+						// Add more cases as needed for other EDM types
+				}
+			}
+			catch (Exception ex)
+			{
+				_logger.LogWarning(ex, "Error converting meta value '{Value}' to type {TargetType}", value, targetType);
+			}
+			return false;
+		}
+	}
+	public class MetaTagConfig
+	{
+		public string SourceMetaTag { get; set; }
+		public string TargetField { get; set; }
+		public string TargetType { get; set; }
 	}
 }
