@@ -43,7 +43,48 @@ These values need to be set in the Azure Function configuration (environment var
     "pageContentExpression": "",
     "CrawlerMaxConcurrency": 3,
     "CrawlerMaxRetries": 3
-
-  }
+  },
+  ,
+  "MetaFieldMappings": [
+    {
+      "SourceMetaTag": "og:locale",
+      "TargetField": "locale",
+      "TargetType": "String"
+    },
+    {
+      "SourceMetaTag": "og:type",
+      "TargetField": "type",
+      "TargetType": "String"
+    },
+    {
+      "SourceMetaTag": "og:title",
+      "TargetField": "meta_title",
+      "TargetType": "String"
+    },
+    {
+      "SourceMetaTag": "og:description",
+      "TargetField": "meta_description",
+      "TargetType": "String"
+    },
+    {
+      "SourceMetaTag": "og:image",
+      "TargetField": "meta_image",
+      "TargetType": "String"
+    },
+    {
+      "SourceMetaTag": "author",
+      "TargetField": "meta_author",
+      "TargetType": "String"
+    },
+    {
+      "SourceMetaTag": "article:published_time",
+      "TargetField": "meta_published_time",
+      "TargetType": "DateTime"
+    },
+    {
+      "SourceMetaTag": "article:modified_time",
+      "TargetField": "meta_modified_time",
+      "TargetType": "DateTime"
+    }
 }
 ```
