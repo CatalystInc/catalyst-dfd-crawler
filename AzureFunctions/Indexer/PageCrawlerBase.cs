@@ -5,13 +5,14 @@ using AzureSearchCrawler;
 using HtmlAgilityPack;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using System;
+using Microsoft.Playwright;
+using Newtonsoft.Json.Linq;
 using System.Collections.Concurrent;
-using System.Collections.Specialized;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace AzureFunctions.Indexer
 {
@@ -20,13 +21,16 @@ namespace AzureFunctions.Indexer
 	/// </summary>
 	public class PageCrawlerBase
 	{
-		internal readonly HttpClient _httpClient;
+		//internal readonly HttpClient _httpClient;
 		internal readonly ILogger<PageCrawlerBase> _logger;
 		private readonly int _maxConcurrency;
 		private readonly int _maxRetries;
 		internal readonly SearchClient _searchClient;
 		private readonly TextExtractor _textExtractor;
-		List<MetaTagConfig> _metaFieldMappings;
+		private readonly List<MetaTagConfig> _metaFieldMappings;
+		private readonly List<JsonLdConfig> _jsonLdMappings;
+		private readonly IPlaywright _playwright;
+		private readonly IBrowserContext _browserContext;
 
 		/// <summary>
 		/// Initializes a new instance of the <see cref="PageCrawlerBase"/> class.
@@ -40,10 +44,10 @@ namespace AzureFunctions.Indexer
 			ArgumentNullException.ThrowIfNull(loggerFactory);
 
 			_logger = loggerFactory.CreateLogger<PageCrawlerBase>();
-			_httpClient = new HttpClient();
+			//_httpClient = new HttpClient();
 
 			var userAgent = configuration["UserAgent"] ?? "DefaultCrawlerBot/1.0";
-			_httpClient.DefaultRequestHeaders.Add("User-Agent", userAgent);
+			//_httpClient.DefaultRequestHeaders.Add("User-Agent", userAgent);
 
 			var searchServiceEndpoint = configuration["SearchServiceEndpoint"] ?? throw new ArgumentNullException(nameof(configuration), "SearchServiceEndpoint is missing");
 			var searchIndexName = configuration["SearchIndexName"] ?? throw new ArgumentNullException(nameof(configuration), "SearchIndexName is missing");
@@ -60,6 +64,19 @@ namespace AzureFunctions.Indexer
 			_textExtractor = new TextExtractor(loggerFactory);
 
 			_metaFieldMappings = configuration.GetSection("MetaFieldMappings").Get<List<MetaTagConfig>>();
+			_jsonLdMappings = configuration.GetSection("JsonLdMappings").Get<List<JsonLdConfig>>();
+
+			_playwright = Playwright.CreateAsync().GetAwaiter().GetResult();
+
+			var browser = _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
+			{
+				Headless = true
+			}).GetAwaiter().GetResult();
+
+			_browserContext = browser.NewContextAsync(new BrowserNewContextOptions
+			{
+				UserAgent = userAgent
+			}).GetAwaiter().GetResult();
 
 			_logger.LogInformation("Page Crawler initialized with User-Agent: {UserAgent}, MaxConcurrency: {MaxConcurrency}, MaxRetries: {MaxRetries}",
 				userAgent, _maxConcurrency, _maxRetries);
@@ -76,15 +93,44 @@ namespace AzureFunctions.Indexer
 		{
 			ArgumentNullException.ThrowIfNull(url);
 			ArgumentNullException.ThrowIfNull(source);
-
 			_logger.LogInformation("Crawling {Url} from source {Source}", url, source);
 
+			IPage page = null;
 			try
 			{
-				using var response = await _httpClient.GetAsync(url);
-				response.EnsureSuccessStatusCode();
+				page = await _browserContext.NewPageAsync();
+				var response = await page.GotoAsync(url, new PageGotoOptions
+				{
+					WaitUntil = WaitUntilState.NetworkIdle,
+					Timeout = 30000 // 30 seconds timeout
+				});
 
-				var html = await response.Content.ReadAsStringAsync();
+				if (response == null || !response.Ok)
+				{
+					throw new Exception($"Failed to load page: {response?.StatusText}");
+				}
+
+				// Wait for any client-side rendering to complete
+				await page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
+				//await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+				//await page.WaitForTimeoutAsync(1000);
+
+				//// Optional: Check for any ongoing XHR requests
+				//var isXhrComplete = await page.EvaluateAsync<bool>(@"
+				//		() => {
+				//			return window.performance
+				//				.getEntriesByType('resource')
+				//				.filter((resource) => resource.initiatorType === 'xmlhttprequest')
+				//				.every((resource) => resource.responseEnd > 0);
+				//		}
+				//	");
+
+				//if (!isXhrComplete)
+				//{
+				//	await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+				//}
+
+				var html = await page.ContentAsync();
 				var doc = new HtmlDocument();
 				doc.LoadHtml(html);
 
@@ -92,6 +138,8 @@ namespace AzureFunctions.Indexer
 				var metaTags = ExtractMetaTags(doc);
 
 				string uniqueId = GenerateUrlUniqueId(url);
+				//var jsonLd = ExtractJsonLd(doc);
+				var jsonLd = ExtractJsonLd(html);
 
 				var searchDocument = new SearchDocument
 				{
@@ -109,7 +157,20 @@ namespace AzureFunctions.Indexer
 				{
 					if (metaTags.TryGetValue(config.SourceMetaTag, out string metaValue))
 					{
-						if (TryConvertMetaValue(metaValue, config.TargetType, out object convertedValue))
+						if (TryConvertValue(metaValue, config.TargetType, out object convertedValue))
+						{
+							searchDocument[config.TargetField] = convertedValue;
+						}
+					}
+				}
+
+
+				if (jsonLd != null)
+				{
+					foreach (var config in _jsonLdMappings)
+					{
+						var token = jsonLd.SelectToken(config.SourceElementPath);
+						if (token != null && !string.IsNullOrEmpty(config.TargetType) && TryConvertValue(token, config.TargetType, out object convertedValue))
 						{
 							searchDocument[config.TargetField] = convertedValue;
 						}
@@ -118,15 +179,22 @@ namespace AzureFunctions.Indexer
 
 				return searchDocument;
 			}
-			catch (HttpRequestException ex)
+			catch (PlaywrightException ex)
 			{
-				_logger.LogError(ex, "HTTP request error while crawling {Url}", url);
+				_logger.LogError(ex, "Playwright error while crawling {Url}", url);
 				throw;
 			}
 			catch (Exception ex)
 			{
 				_logger.LogError(ex, "Unexpected error while crawling {Url}", url);
 				throw;
+			}
+			finally
+			{
+				if (page != null)
+				{
+					await page.CloseAsync();
+				}
 			}
 		}
 
@@ -160,6 +228,55 @@ namespace AzureFunctions.Indexer
 			_logger.LogInformation("Crawled {Count} pages from source {Source}", results.Count, crawlRequest.Source);
 		}
 
+		public static JObject ExtractJsonLd(string html)
+		{
+			// Regular expression to match <script type="application/ld+json"> content
+			//var regex = new Regex(@"<script\s+type\s*=\s*[""']application/ld\+json[""']\s*>(.*?)</script>");
+			var regex = new Regex(@"<script[^>]*type\s*=\s*[""']application/ld\+json[""'][^>]*>(.*?)</script>",
+							  RegexOptions.Singleline | RegexOptions.IgnoreCase);
+			var match = regex.Match(html);
+			if (match.Success)
+			{
+				var jsonLdContent = match.Groups[1].Value.Trim();
+				try
+				{
+					return JObject.Parse(jsonLdContent);
+				}
+				catch (JsonException ex)
+				{
+					Console.WriteLine($"Error parsing JSON-LD: {ex.Message}");
+				}
+			}
+			else
+			{
+				Console.WriteLine("No JSON-LD script tag found in the HTML.");
+			}
+
+			return null;
+		}
+		public static JsonDocument ExtractJsonLd(HtmlDocument htmlDocument)
+		{
+			var scriptNodes = htmlDocument.DocumentNode.SelectNodes("//script[@type='application/ld+json']");
+
+			if (scriptNodes != null)
+			{
+				foreach (var scriptNode in scriptNodes)
+				{
+					var jsonLdContent = scriptNode.InnerHtml;
+
+					try
+					{
+						return JsonDocument.Parse(jsonLdContent);
+					}
+					catch (JsonException ex)
+					{
+						Console.WriteLine($"Error parsing JSON-LD: {ex.Message}");
+					}
+				}
+			}
+
+			return null;
+		}
 		private static IReadOnlyDictionary<string, string> ExtractMetaTags(HtmlDocument doc)
 		{
 			var metaTags = new Dictionary<string, string>();
@@ -246,7 +363,107 @@ namespace AzureFunctions.Indexer
 			};
 		}
 
-		private bool TryConvertMetaValue(string value, string targetType, out object result)
+		public bool TryConvertValue(JToken token, string targetType, out object result)
+		{
+			result = null;
+			try
+			{
+				switch (targetType.ToLower())
+				{
+					case "string":
+						result = token.ToString();
+						return true;
+
+					case "int32":
+					case "int":
+						if (token.Type == JTokenType.Integer && token.Value<int>() is int intResult)
+						{
+							result = intResult;
+							return true;
+						}
+						break;
+
+					case "int64":
+						if (token.Type == JTokenType.Integer && token.Value<long>() is long longResult)
+						{
+							result = longResult;
+							return true;
+						}
+						break;
+
+					case "double":
+						if (token.Type == JTokenType.Float && token.Value<double>() is double doubleResult)
+						{
+							result = doubleResult;
+							return true;
+						}
+						else if (double.TryParse(token.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out doubleResult))
+						{
+							result = doubleResult;
+							return true;
+						}
+						break;
+
+					case "boolean":
+						if (token.Type == JTokenType.Boolean && token.Value<bool>() is bool boolResult)
+						{
+							result = boolResult;
+							return true;
+						}
+						else if (bool.TryParse(token.ToString(), out boolResult))
+						{
+							result = boolResult;
+							return true;
+						}
+						break;
+
+					case "datetimeoffset":
+						if (token.Type == JTokenType.Date && token.Value<DateTimeOffset>() is DateTimeOffset dateTimeOffsetResult)
+						{
+							result = dateTimeOffsetResult;
+							return true;
+						}
+						else if (DateTimeOffset.TryParse(token.ToString(), out dateTimeOffsetResult))
+						{
+							result = dateTimeOffsetResult;
+							return true;
+						}
+						break;
+
+					case "datetime":
+						if (token.Type == JTokenType.Date && token.Value<DateTime>() is DateTime dateTimeResult)
+						{
+							result = new DateTimeOffset(dateTimeResult.ToUniversalTime(), TimeSpan.Zero);
+							return true;
+						}
+						else if (DateTime.TryParse(token.ToString(), out dateTimeResult))
+						{
+							result = new DateTimeOffset(dateTimeResult.ToUniversalTime(), TimeSpan.Zero);
+							return true;
+						}
+						break;
+
+					case "geography":
+						var coordinates = token.ToString().Split(',');
+						if (coordinates.Length == 2 &&
+							double.TryParse(coordinates[0], out double lat) &&
+							double.TryParse(coordinates[1], out double lon))
+						{
+							result = $"POINT({lon} {lat})";
+							return true;
+						}
+						break;
+						// Add more cases as needed for other types
+				}
+			}
+			catch (Exception ex)
+			{
+				_logger.LogWarning(ex, "Error converting JToken value '{Token}' to type {TargetType}", token, targetType);
+			}
+
+			return false;
+		}
+		private bool TryConvertValue(string value, string targetType, out object result)
 		{
 			result = null;
 			try
@@ -319,10 +536,23 @@ namespace AzureFunctions.Indexer
 			}
 			return false;
 		}
+		public async ValueTask DisposeAsync()
+		{
+			await _browserContext.DisposeAsync();
+			await _browserContext.Browser.DisposeAsync();
+			_playwright.Dispose();
+		}
 	}
 	public class MetaTagConfig
 	{
 		public string SourceMetaTag { get; set; }
+		public string TargetField { get; set; }
+		public string TargetType { get; set; }
+	}
+
+	public class JsonLdConfig
+	{
+		public string SourceElementPath { get; set; }
 		public string TargetField { get; set; }
 		public string TargetType { get; set; }
 	}
