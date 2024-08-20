@@ -1,3 +1,0 @@
-[config]
-SCM_DO_BUILD_DURING_DEPLOYMENT=true
-POST_BUILD_COMMAND=powershell.exe -File ./playwright.ps1

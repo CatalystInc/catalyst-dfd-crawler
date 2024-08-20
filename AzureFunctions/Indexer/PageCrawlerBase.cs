@@ -5,7 +5,6 @@ using AzureSearchCrawler;
 using HtmlAgilityPack;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Microsoft.Playwright;
 using Newtonsoft.Json.Linq;
 using System.Collections.Concurrent;
 using System.Globalization;
@@ -21,7 +20,7 @@ namespace AzureFunctions.Indexer
 	/// </summary>
 	public class PageCrawlerBase
 	{
-		//internal readonly HttpClient _httpClient;
+		internal readonly HttpClient _httpClient;
 		internal readonly ILogger<PageCrawlerBase> _logger;
 		private readonly int _maxConcurrency;
 		private readonly int _maxRetries;
@@ -29,8 +28,6 @@ namespace AzureFunctions.Indexer
 		private readonly TextExtractor _textExtractor;
 		private readonly List<MetaTagConfig> _metaFieldMappings;
 		private readonly List<JsonLdConfig> _jsonLdMappings;
-		private readonly IPlaywright _playwright;
-		private readonly IBrowserContext _browserContext;
 
 		/// <summary>
 		/// Initializes a new instance of the <see cref="PageCrawlerBase"/> class.
@@ -44,10 +41,10 @@ namespace AzureFunctions.Indexer
 			ArgumentNullException.ThrowIfNull(loggerFactory);
 
 			_logger = loggerFactory.CreateLogger<PageCrawlerBase>();
-			//_httpClient = new HttpClient();
+			_httpClient = new HttpClient();
 
 			var userAgent = configuration["UserAgent"] ?? "DefaultCrawlerBot/1.0";
-			//_httpClient.DefaultRequestHeaders.Add("User-Agent", userAgent);
+			_httpClient.DefaultRequestHeaders.Add("User-Agent", userAgent);
 
 			var searchServiceEndpoint = configuration["SearchServiceEndpoint"] ?? throw new ArgumentNullException(nameof(configuration), "SearchServiceEndpoint is missing");
 			var searchIndexName = configuration["SearchIndexName"] ?? throw new ArgumentNullException(nameof(configuration), "SearchIndexName is missing");
@@ -66,18 +63,6 @@ namespace AzureFunctions.Indexer
 			_metaFieldMappings = configuration.GetSection("MetaFieldMappings").Get<List<MetaTagConfig>>();
 			_jsonLdMappings = configuration.GetSection("JsonLdMappings").Get<List<JsonLdConfig>>();
 
-			_playwright = Playwright.CreateAsync().GetAwaiter().GetResult();
-
-			var browser = _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
-			{
-				Headless = true
-			}).GetAwaiter().GetResult();
-
-			_browserContext = browser.NewContextAsync(new BrowserNewContextOptions
-			{
-				UserAgent = userAgent
-			}).GetAwaiter().GetResult();
-
 			_logger.LogInformation("Page Crawler initialized with User-Agent: {UserAgent}, MaxConcurrency: {MaxConcurrency}, MaxRetries: {MaxRetries}",
 				userAgent, _maxConcurrency, _maxRetries);
 		}
@@ -95,42 +80,12 @@ namespace AzureFunctions.Indexer
 			ArgumentNullException.ThrowIfNull(source);
 			_logger.LogInformation("Crawling {Url} from source {Source}", url, source);
 
-			IPage page = null;
 			try
 			{
-				page = await _browserContext.NewPageAsync();
-				var response = await page.GotoAsync(url, new PageGotoOptions
-				{
-					WaitUntil = WaitUntilState.NetworkIdle,
-					Timeout = 30000 // 30 seconds timeout
-				});
+				using var response = await _httpClient.GetAsync(url);
+				response.EnsureSuccessStatusCode();
 
-				if (response == null || !response.Ok)
-				{
-					throw new Exception($"Failed to load page: {response?.StatusText}");
-				}
-
-				// Wait for any client-side rendering to complete
-				await page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
-				//await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
-				//await page.WaitForTimeoutAsync(1000);
-
-				//// Optional: Check for any ongoing XHR requests
-				//var isXhrComplete = await page.EvaluateAsync<bool>(@"
-				//		() => {
-				//			return window.performance
-				//				.getEntriesByType('resource')
-				//				.filter((resource) => resource.initiatorType === 'xmlhttprequest')
-				//				.every((resource) => resource.responseEnd > 0);
-				//		}
-				//	");
-
-				//if (!isXhrComplete)
-				//{
-				//	await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
-				//}
-
-				var html = await page.ContentAsync();
+				var html = await response.Content.ReadAsStringAsync();
 				var doc = new HtmlDocument();
 				doc.LoadHtml(html);
 
@@ -179,22 +134,10 @@ namespace AzureFunctions.Indexer
 
 				return searchDocument;
 			}
-			catch (PlaywrightException ex)
-			{
-				_logger.LogError(ex, "Playwright error while crawling {Url}", url);
-				throw;
-			}
 			catch (Exception ex)
 			{
 				_logger.LogError(ex, "Unexpected error while crawling {Url}", url);
 				throw;
-			}
-			finally
-			{
-				if (page != null)
-				{
-					await page.CloseAsync();
-				}
 			}
 		}
 
@@ -230,8 +173,6 @@ namespace AzureFunctions.Indexer
 
 		public static JObject ExtractJsonLd(string html)
 		{
-			// Regular expression to match <script type="application/ld+json"> content
-			//var regex = new Regex(@"<script\s+type\s*=\s*[""']application/ld\+json[""']\s*>(.*?)</script>");
 			var regex = new Regex(@"<script[^>]*type\s*=\s*[""']application/ld\+json[""'][^>]*>(.*?)</script>",
 							  RegexOptions.Singleline | RegexOptions.IgnoreCase);
 			var match = regex.Match(html);
@@ -535,12 +476,6 @@ namespace AzureFunctions.Indexer
 				_logger.LogWarning(ex, "Error converting meta value '{Value}' to type {TargetType}", value, targetType);
 			}
 			return false;
-		}
-		public async ValueTask DisposeAsync()
-		{
-			await _browserContext.DisposeAsync();
-			await _browserContext.Browser.DisposeAsync();
-			_playwright.Dispose();
 		}
 	}
 	public class MetaTagConfig
