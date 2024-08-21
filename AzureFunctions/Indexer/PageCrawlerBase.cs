@@ -1,9 +1,11 @@
 ﻿using Azure;
 using Azure.Search.Documents;
+using Azure.Search.Documents.Indexes.Models;
 using Azure.Search.Documents.Models;
 using AzureSearchCrawler;
 using HtmlAgilityPack;
 using Microsoft.Extensions.Configuration;
+using Azure.Search.Documents.Indexes;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 using System.Collections.Concurrent;
@@ -25,6 +27,7 @@ namespace AzureFunctions.Indexer
 		private readonly int _maxConcurrency;
 		private readonly int _maxRetries;
 		internal readonly SearchClient _searchClient;
+		internal readonly SearchIndexClient _indexClient;
 		private readonly TextExtractor _textExtractor;
 		private readonly List<MetaTagConfig> _metaFieldMappings;
 		private readonly List<JsonLdConfig> _jsonLdMappings;
@@ -54,6 +57,8 @@ namespace AzureFunctions.Indexer
 				new Uri(searchServiceEndpoint),
 				searchIndexName,
 				new AzureKeyCredential(searchApiKey));
+
+			_indexClient = new SearchIndexClient(new Uri(searchServiceEndpoint), new AzureKeyCredential(searchApiKey));
 
 			_maxConcurrency = int.Parse(configuration["CrawlerMaxConcurrency"] ?? "3");
 			_maxRetries = int.Parse(configuration["CrawlerMaxRetries"] ?? "3");
@@ -475,6 +480,117 @@ namespace AzureFunctions.Indexer
 			{
 				_logger.LogWarning(ex, "Error converting meta value '{Value}' to type {TargetType}", value, targetType);
 			}
+			return false;
+		}
+
+
+		public async Task<bool> CloneIndexSchemaAsync(string sourceIndexName, string targetIndexName)
+		{
+			Console.WriteLine($"Cloning schema from '{sourceIndexName}' to '{targetIndexName}'");
+
+			try
+			{
+				// Get the source index
+				var sourceIndex = await _indexClient.GetIndexAsync(sourceIndexName);
+
+				// Create a new index with the same schema
+				var newIndex = new SearchIndex(targetIndexName)
+				{
+					Fields = sourceIndex.Value.Fields,
+					DefaultScoringProfile = sourceIndex.Value.DefaultScoringProfile,
+					CorsOptions = sourceIndex.Value.CorsOptions,
+					VectorSearch = sourceIndex.Value.VectorSearch
+				};
+
+				// Add analyzers
+				if (sourceIndex.Value.Analyzers != null)
+				{
+					foreach (var analyzer in sourceIndex.Value.Analyzers)
+					{
+						newIndex.Analyzers.Add(analyzer);
+					}
+				}
+
+				// Add char filters
+				if (sourceIndex.Value.CharFilters != null)
+				{
+					foreach (var charFilter in sourceIndex.Value.CharFilters)
+					{
+						newIndex.CharFilters.Add(charFilter);
+					}
+				}
+
+				// Add tokenizers
+				if (sourceIndex.Value.Tokenizers != null)
+				{
+					foreach (var tokenizer in sourceIndex.Value.Tokenizers)
+					{
+						newIndex.Tokenizers.Add(tokenizer);
+					}
+				}
+
+				// Add token filters
+				if (sourceIndex.Value.TokenFilters != null)
+				{
+					foreach (var tokenFilter in sourceIndex.Value.TokenFilters)
+					{
+						newIndex.TokenFilters.Add(tokenFilter);
+					}
+				}
+
+				// Add scoring profiles
+				if (sourceIndex.Value.ScoringProfiles != null)
+				{
+					foreach (var scoringProfile in sourceIndex.Value.ScoringProfiles)
+					{
+						newIndex.ScoringProfiles.Add(scoringProfile);
+					}
+				}
+
+				// Add suggesters
+				if (sourceIndex.Value.Suggesters != null)
+				{
+					foreach (var suggester in sourceIndex.Value.Suggesters)
+					{
+						newIndex.Suggesters.Add(suggester);
+					}
+				}
+
+
+				// Set encryption key if present in the source index
+				//if (sourceIndex.Value.EncryptionKey != null)
+				//{
+				//	newIndex.EncryptionKey = new SearchResourceEncryptionKey
+				//	{
+				//		KeyName = sourceIndex.Value.EncryptionKey.KeyName,
+				//		KeyVersion = sourceIndex.Value.EncryptionKey.KeyVersion,
+				//		VaultUrl = sourceIndex.Value.EncryptionKey.VaultUrl
+				//	};
+				//}
+
+				// Create the new index
+				var createIndexResponse = await _indexClient.CreateOrUpdateIndexAsync(newIndex);
+
+				if (createIndexResponse.Value != null)
+				{
+					Console.WriteLine($"Schema cloned successfully. New index '{targetIndexName}' created.");
+					return true;
+				}
+				else
+				{
+					Console.WriteLine($"Failed to create index '{targetIndexName}'. Please check the Azure portal for details.");
+				}
+			}
+			catch (RequestFailedException ex)
+			{
+				Console.WriteLine($"Error cloning index schema: {ex.Message}");
+				Console.WriteLine($"Status: {ex.Status}, Error Code: {ex.ErrorCode}");
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"Unexpected error occurred: {ex.Message}");
+			}
+
 			return false;
 		}
 	}
