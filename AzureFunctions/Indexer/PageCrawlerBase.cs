@@ -82,7 +82,7 @@ namespace AzureFunctions.Indexer
 			try
 			{
 				var newAlias = new SearchAlias(_searchIndexAlias, indexName);
-				
+
 				await _searchIndexClient.CreateAliasAsync(newAlias);
 				_logger.LogInformation($"Created new alias {_searchIndexAlias} pointing to {indexName}");
 			}
@@ -96,7 +96,7 @@ namespace AzureFunctions.Indexer
 
 		private async Task InitializeIndexNames()
 		{
-			var indexes =  _searchIndexClient.GetIndexNames().ToList();
+			var indexes = _searchIndexClient.GetIndexNames().ToList();
 			var index0 = $"{_searchIndexBaseName}_0";
 			var index1 = $"{_searchIndexBaseName}_1";
 
@@ -257,7 +257,7 @@ namespace AzureFunctions.Indexer
 				await StartIndexSwapAsync();
 			}
 
-			
+
 
 			var indexName = string.IsNullOrEmpty(_newIndexName) ? _currentIndexName : _newIndexName;
 			_searchClient = new SearchClient(
