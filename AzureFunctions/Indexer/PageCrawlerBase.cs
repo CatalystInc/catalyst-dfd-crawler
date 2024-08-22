@@ -1,11 +1,12 @@
 ﻿using Azure;
 using Azure.Search.Documents;
+using Azure.Search.Documents.Indexes;
 using Azure.Search.Documents.Indexes.Models;
 using Azure.Search.Documents.Models;
 using AzureSearchCrawler;
+using Google.Protobuf.WellKnownTypes;
 using HtmlAgilityPack;
 using Microsoft.Extensions.Configuration;
-using Azure.Search.Documents.Indexes;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 using System.Collections.Concurrent;
@@ -26,11 +27,17 @@ namespace AzureFunctions.Indexer
 		internal readonly ILogger<PageCrawlerBase> _logger;
 		private readonly int _maxConcurrency;
 		private readonly int _maxRetries;
-		internal readonly SearchClient _searchClient;
-		internal readonly SearchIndexClient _indexClient;
+		internal SearchClient _searchClient;
+		internal readonly SearchIndexClient _searchIndexClient;
 		private readonly TextExtractor _textExtractor;
 		private readonly List<MetaTagConfig> _metaFieldMappings;
 		private readonly List<JsonLdConfig> _jsonLdMappings;
+		private readonly string _searchIndexBaseName;
+		private readonly string _searchServiceEndpoint;
+		private readonly string _searchIndexAlias;
+		private readonly string _searchApiKey;
+		private string _currentIndexName;
+		private string _newIndexName;
 
 		/// <summary>
 		/// Initializes a new instance of the <see cref="PageCrawlerBase"/> class.
@@ -49,16 +56,14 @@ namespace AzureFunctions.Indexer
 			var userAgent = configuration["UserAgent"] ?? "DefaultCrawlerBot/1.0";
 			_httpClient.DefaultRequestHeaders.Add("User-Agent", userAgent);
 
-			var searchServiceEndpoint = configuration["SearchServiceEndpoint"] ?? throw new ArgumentNullException(nameof(configuration), "SearchServiceEndpoint is missing");
-			var searchIndexName = configuration["SearchIndexName"] ?? throw new ArgumentNullException(nameof(configuration), "SearchIndexName is missing");
-			var searchApiKey = configuration["SearchApiKey"] ?? throw new ArgumentNullException(nameof(configuration), "SearchApiKey is missing");
+			_searchServiceEndpoint = configuration["SearchServiceEndpoint"] ?? throw new ArgumentNullException(nameof(configuration), "SearchServiceEndpoint is missing");
+			_searchApiKey = configuration["SearchApiKey"] ?? throw new ArgumentNullException(nameof(configuration), "SearchApiKey is missing");
+			_searchIndexAlias = configuration["SearchIndexAlias"] ?? throw new ArgumentNullException(nameof(configuration), "SearchIndexAlias is missing");
+			_searchIndexBaseName = configuration["SearchIndexBaseName"] ?? throw new ArgumentNullException(nameof(configuration), "SearchIndexBaseName is missing");
 
-			_searchClient = new SearchClient(
-				new Uri(searchServiceEndpoint),
-				searchIndexName,
-				new AzureKeyCredential(searchApiKey));
 
-			_indexClient = new SearchIndexClient(new Uri(searchServiceEndpoint), new AzureKeyCredential(searchApiKey));
+			_searchIndexClient = new SearchIndexClient(new Uri(_searchServiceEndpoint), new AzureKeyCredential(_searchApiKey));
+			InitializeIndexNames().Wait();
 
 			_maxConcurrency = int.Parse(configuration["CrawlerMaxConcurrency"] ?? "3");
 			_maxRetries = int.Parse(configuration["CrawlerMaxRetries"] ?? "3");
@@ -70,6 +75,95 @@ namespace AzureFunctions.Indexer
 
 			_logger.LogInformation("Page Crawler initialized with User-Agent: {UserAgent}, MaxConcurrency: {MaxConcurrency}, MaxRetries: {MaxRetries}",
 				userAgent, _maxConcurrency, _maxRetries);
+		}
+
+		private async Task CreateAliasAsync(string indexName)
+		{
+			try
+			{
+				var newAlias = new SearchAlias(_searchIndexAlias, indexName);
+				
+				await _searchIndexClient.CreateAliasAsync(newAlias);
+				_logger.LogInformation($"Created new alias {_searchIndexAlias} pointing to {indexName}");
+			}
+			catch (Exception ex)
+			{
+				_logger.LogError(ex, $"Error creating alias {_searchIndexAlias}");
+				// Depending on your error handling strategy, you might want to throw this exception
+				// throw;
+			}
+		}
+
+		private async Task InitializeIndexNames()
+		{
+			var indexes =  _searchIndexClient.GetIndexNames().ToList();
+			var index0 = $"{_searchIndexBaseName}_0";
+			var index1 = $"{_searchIndexBaseName}_1";
+
+
+			Response<SearchAlias> aliasResponse = null;
+			try
+			{
+				aliasResponse = _searchIndexClient.GetAlias(_searchIndexAlias);
+			}
+			catch (RequestFailedException ex) when (ex.Status == 404)
+			{
+				// Alias doesn't exist, create it pointing to index0
+				_currentIndexName = index0;
+				await CreateAliasAsync(_currentIndexName);
+			}
+
+			// Determine current index
+			if (indexes.Contains(index0) || indexes.Contains(index1))
+			{
+				// Both indexes exist, determine which one is current based on the alias
+				try
+				{
+					aliasResponse ??= _searchIndexClient.GetAlias(_searchIndexAlias);
+
+					var firstIndex = aliasResponse.Value.Indexes.FirstOrDefault();
+					if (aliasResponse.Value != null && firstIndex != null)
+					{
+						_currentIndexName = firstIndex;
+					}
+					else
+					{
+						_currentIndexName = index0; // Default to index0 if alias exists but doesn't point to any index
+					}
+				}
+				catch (RequestFailedException ex) when (ex.Status == 404)
+				{
+					// Alias doesn't exist, create it pointing to index0
+					_currentIndexName = index0;
+					await CreateAliasAsync(_currentIndexName);
+				}
+			}
+			else if (indexes.Contains(index0))
+			{
+				_currentIndexName = index0;
+				await CreateAliasAsync(_currentIndexName);
+			}
+			else if (indexes.Contains(index1))
+			{
+				_currentIndexName = index1;
+				await CreateAliasAsync(_currentIndexName);
+			}
+			else
+			{
+				// Neither index exists, start with index0
+				_currentIndexName = index0;
+				// Note: We don't create the alias here because the index doesn't exist yet
+			}
+
+			_newIndexName = GetOtherIndexName(_currentIndexName);
+			_logger.LogInformation($"Initialized with current index: {_currentIndexName}, new index: {_newIndexName}");
+		}
+
+		private static string GetOtherIndexName(string indexName)
+		{
+			return indexName.EndsWith("_0")
+				? indexName.Substring(0, indexName.Length - 1) + "1"
+				: indexName.Substring(0, indexName.Length - 1) + "0";
 		}
 
 		/// <summary>
@@ -156,24 +250,68 @@ namespace AzureFunctions.Indexer
 		{
 			ArgumentNullException.ThrowIfNull(crawlRequest);
 
-			if (crawlRequest.Urls is not { Count: > 0 })
-			{
-				_logger.LogWarning("Invalid crawl request received");
-				return;
-			}
-
 			var results = new ConcurrentBag<SearchDocument>();
 
-			await Parallel.ForEachAsync(crawlRequest.Urls,
-				new ParallelOptions { MaxDegreeOfParallelism = _maxConcurrency },
-				async (url, ct) =>
-				{
-					var searchDocument = await ProcessUrlWithRetryAsync(url, crawlRequest.Source, ct);
-					await Task.Delay(100, ct); // Slow down to prevent rate limiting
-					results.Add(searchDocument);
-				});
+			if (crawlRequest.IndexSwap == "start")
+			{
+				await StartIndexSwapAsync();
+			}
 
-			_logger.LogInformation("Crawled {Count} pages from source {Source}", results.Count, crawlRequest.Source);
+			
+
+			var indexName = string.IsNullOrEmpty(_newIndexName) ? _currentIndexName : _newIndexName;
+			_searchClient = new SearchClient(
+				new Uri(_searchServiceEndpoint),
+				indexName,
+				new AzureKeyCredential(_searchApiKey));
+
+			if (crawlRequest.Urls != null && crawlRequest.Urls.Count > 0)
+			{
+				await Parallel.ForEachAsync(crawlRequest.Urls,
+					new ParallelOptions { MaxDegreeOfParallelism = _maxConcurrency },
+					async (url, ct) =>
+					{
+						var searchDocument = await ProcessUrlWithRetryAsync(url, crawlRequest.Source, ct);
+						await Task.Delay(100, ct); // Slow down to prevent rate limiting
+						results.Add(searchDocument);
+					});
+
+				_logger.LogInformation("Crawled {Count} pages from source {Source}", results.Count, crawlRequest.Source);
+			}
+			else
+			{
+				_logger.LogInformation("No pages to crawl in request");
+			}
+
+			if (crawlRequest.IndexSwap == "end")
+			{
+				await CompleteIndexSwapAsync();
+			}
+		}
+
+		private async Task StartIndexSwapAsync()
+		{
+			_logger.LogInformation("Starting index swap process");
+
+			try
+			{
+				// Attempt to get the index. If it doesn't exist, this will throw an exception
+				await _searchIndexClient.GetIndexAsync(_newIndexName);
+
+				// If we reach here, the index exists, so we delete it
+				_logger.LogInformation($"Index {_newIndexName} already exists. Deleting it.");
+				await _searchIndexClient.DeleteIndexAsync(_newIndexName);
+			}
+			catch (RequestFailedException ex) when (ex.Status == 404)
+			{
+				// Index doesn't exist, which is fine for our purposes
+				_logger.LogInformation($"Index {_newIndexName} does not exist. Proceeding with creation.");
+			}
+
+			// Clone the existing index schema
+			await CloneIndexSchemaAsync(_currentIndexName, _newIndexName);
+
+			_logger.LogInformation($"New index {_newIndexName} created");
 		}
 
 		public static JObject ExtractJsonLd(string html)
@@ -223,7 +361,7 @@ namespace AzureFunctions.Indexer
 
 			return null;
 		}
-		private static IReadOnlyDictionary<string, string> ExtractMetaTags(HtmlDocument doc)
+		static IReadOnlyDictionary<string, string> ExtractMetaTags(HtmlDocument doc)
 		{
 			var metaTags = new Dictionary<string, string>();
 			var nodes = doc.DocumentNode.SelectNodes("//meta");
@@ -246,7 +384,7 @@ namespace AzureFunctions.Indexer
 			return metaTags;
 		}
 
-		private static string GenerateUrlUniqueId(string url)
+		static string GenerateUrlUniqueId(string url)
 		{
 			using var sha256 = SHA256.Create();
 			byte[] hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(url));
@@ -257,7 +395,7 @@ namespace AzureFunctions.Indexer
 				.TrimEnd('=');
 		}
 
-		private async Task IndexSearchDocumentAsync(SearchDocument document, CancellationToken cancellationToken)
+		async Task IndexSearchDocumentAsync(SearchDocument document, CancellationToken cancellationToken)
 		{
 			try
 			{
@@ -272,7 +410,7 @@ namespace AzureFunctions.Indexer
 			}
 		}
 
-		private async Task<SearchDocument> ProcessUrlWithRetryAsync(string url, string source, CancellationToken cancellationToken)
+		async Task<SearchDocument> ProcessUrlWithRetryAsync(string url, string source, CancellationToken cancellationToken)
 		{
 			for (int attempt = 1; attempt <= _maxRetries; attempt++)
 			{
@@ -309,7 +447,7 @@ namespace AzureFunctions.Indexer
 			};
 		}
 
-		public bool TryConvertValue(JToken token, string targetType, out object result)
+		bool TryConvertValue(JToken token, string targetType, out object result)
 		{
 			result = null;
 			try
@@ -409,7 +547,7 @@ namespace AzureFunctions.Indexer
 
 			return false;
 		}
-		private bool TryConvertValue(string value, string targetType, out object result)
+		bool TryConvertValue(string value, string targetType, out object result)
 		{
 			result = null;
 			try
@@ -483,6 +621,83 @@ namespace AzureFunctions.Indexer
 			return false;
 		}
 
+		private async Task DeleteOldIndexAsync(string indexName)
+		{
+			try
+			{
+				await _searchIndexClient.DeleteIndexAsync(indexName);
+				_logger.LogInformation($"Successfully deleted old index: {indexName}");
+			}
+			catch (RequestFailedException ex) when (ex.Status == 404)
+			{
+				_logger.LogWarning($"Old index {indexName} not found, it may have been already deleted.");
+			}
+			catch (Exception ex)
+			{
+				_logger.LogError(ex, $"Error deleting old index {indexName}");
+				// Depending on your error handling strategy, you might want to throw this exception
+				// throw;
+			}
+		}
+		private async Task CompleteIndexSwapAsync()
+		{
+			_logger.LogInformation("Completing index swap process");
+			if (string.IsNullOrEmpty(_newIndexName))
+			{
+				_logger.LogWarning("No new index to swap to. Swap process was not started.");
+				return;
+			}
+
+			string oldIndexName = _currentIndexName;
+
+			try
+			{
+				// Check if the alias exists
+				var aliasResponse = await _searchIndexClient.GetAliasAsync(_searchIndexAlias);
+				if (aliasResponse != null && aliasResponse.Value != null)
+				{
+					// Alias exists, update it
+					var aliasUpdate = new SearchAlias(_searchIndexAlias, _newIndexName);
+					await _searchIndexClient.CreateOrUpdateAliasAsync(_searchIndexAlias, aliasUpdate);
+					_logger.LogInformation($"Updated existing alias {_searchIndexAlias} to point to {_newIndexName}");
+				}
+				else
+				{
+					// Alias doesn't exist, create it
+					var newAlias = new SearchAlias(_searchIndexAlias, _newIndexName);
+					await _searchIndexClient.CreateAliasAsync(newAlias);
+					_logger.LogInformation($"Created new alias {_searchIndexAlias} pointing to {_newIndexName}");
+				}
+
+				// Swap completed successfully, now delete the old index
+				await DeleteOldIndexAsync(oldIndexName);
+
+				_logger.LogInformation($"Index swap completed. Alias {_searchIndexAlias} now points to {_newIndexName}");
+
+				// Update the current index name
+				_currentIndexName = _newIndexName;
+				_newIndexName = GetOtherIndexName(_currentIndexName);
+			}
+			catch (RequestFailedException ex) when (ex.Status == 404)
+			{
+				// Alias doesn't exist, create it
+				var newAlias = new SearchAlias(_searchIndexAlias, _newIndexName);
+				await _searchIndexClient.CreateAliasAsync(newAlias);
+				_logger.LogInformation($"Created new alias {_searchIndexAlias} pointing to {_newIndexName}");
+
+				// Swap completed successfully, now delete the old index
+				await DeleteOldIndexAsync(oldIndexName);
+
+				// Update the current index name
+				_currentIndexName = _newIndexName;
+				_newIndexName = GetOtherIndexName(_currentIndexName);
+			}
+			catch (Exception ex)
+			{
+				_logger.LogError(ex, $"Error updating alias {_searchIndexAlias}");
+				throw;
+			}
+		}
 
 		public async Task<bool> CloneIndexSchemaAsync(string sourceIndexName, string targetIndexName)
 		{
@@ -491,7 +706,7 @@ namespace AzureFunctions.Indexer
 			try
 			{
 				// Get the source index
-				var sourceIndex = await _indexClient.GetIndexAsync(sourceIndexName);
+				var sourceIndex = await _searchIndexClient.GetIndexAsync(sourceIndexName);
 
 				// Create a new index with the same schema
 				var newIndex = new SearchIndex(targetIndexName)
@@ -569,7 +784,7 @@ namespace AzureFunctions.Indexer
 				//}
 
 				// Create the new index
-				var createIndexResponse = await _indexClient.CreateOrUpdateIndexAsync(newIndex);
+				var createIndexResponse = await _searchIndexClient.CreateOrUpdateIndexAsync(newIndex);
 
 				if (createIndexResponse.Value != null)
 				{
@@ -593,18 +808,5 @@ namespace AzureFunctions.Indexer
 
 			return false;
 		}
-	}
-	public class MetaTagConfig
-	{
-		public string SourceMetaTag { get; set; }
-		public string TargetField { get; set; }
-		public string TargetType { get; set; }
-	}
-
-	public class JsonLdConfig
-	{
-		public string SourceElementPath { get; set; }
-		public string TargetField { get; set; }
-		public string TargetType { get; set; }
 	}
 }
