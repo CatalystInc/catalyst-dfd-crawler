@@ -36,6 +36,7 @@ namespace AzureFunctions.Indexer
 		private readonly string _searchServiceEndpoint;
 		private readonly string _searchIndexAlias;
 		private readonly string _searchApiKey;
+		private readonly bool _deleteOldIndexOnSwap;
 		private string _currentIndexName;
 		private string _newIndexName;
 
@@ -60,7 +61,7 @@ namespace AzureFunctions.Indexer
 			_searchApiKey = configuration["SearchApiKey"] ?? throw new ArgumentNullException(nameof(configuration), "SearchApiKey is missing");
 			_searchIndexAlias = configuration["SearchIndexAlias"] ?? throw new ArgumentNullException(nameof(configuration), "SearchIndexAlias is missing");
 			_searchIndexBaseName = configuration["SearchIndexBaseName"] ?? throw new ArgumentNullException(nameof(configuration), "SearchIndexBaseName is missing");
-
+			_deleteOldIndexOnSwap = bool.Parse(Environment.GetEnvironmentVariable("DeleteOldIndexOnSwap") ?? "false");
 
 			_searchIndexClient = new SearchIndexClient(new Uri(_searchServiceEndpoint), new AzureKeyCredential(_searchApiKey));
 			InitializeIndexNames().Wait();
@@ -623,6 +624,11 @@ namespace AzureFunctions.Indexer
 
 		private async Task DeleteOldIndexAsync(string indexName)
 		{
+			if(!_deleteOldIndexOnSwap)
+			{
+				_logger.LogInformation("DeleteOldIndexOnSwap is set to false. Skipping deletion of old index.");
+				return;
+			}
 			try
 			{
 				await _searchIndexClient.DeleteIndexAsync(indexName);
