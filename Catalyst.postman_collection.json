@@ -1,0 +1,197 @@
+{
+	"info": {
+		"_postman_id": "2ca3f2a8-b6ee-4c13-ba80-b41762ff9a2b",
+		"name": "Catalyst",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "3189063"
+	},
+	"item": [
+		{
+			"name": "CrawlPageHttp",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n    \"urls\": [\r\n        \"https://www.catalyst.org/2020/08/10/racism-gender-pay-gap-women/\",\r\n        \"https://www.catalyst.org/2021/04/27/future-of-work-summit-europe-2021-takeaways/\"\r\n    ]\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:7071/api/CrawlPagesHttp",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "7071",
+					"path": [
+						"api",
+						"CrawlPagesHttp"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "PageCrawlerHttp",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n   \"source\": \"test\",\r\n   \"urls\": [\r\n        \"https://www.catalyst.org/2020/08/10/racism-gender-pay-gap-women/\",\r\n        \"https://www.catalyst.org/2021/04/27/future-of-work-summit-europe-2021-takeaways/\"\r\n    ]\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:7071/api/PageCrawlerHttp",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "7071",
+					"path": [
+						"api",
+						"PageCrawlerHttp"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "PageCrawlerHttp swap start",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n   \"source\": \"test\",\r\n   \"urls\": [\r\n        \"https://www.catalyst.org/series/postponed-leveraging-design-thinking-to-build-workplaces-that-work-for-women/\",\r\n        \"https://www.catalyst.org/series/marc-leadership-learning-series-north-america/\",\r\n        \"https://www.catalyst.org/series/marc-leadership-learning-series-virtual/\"\r\n    ],\r\n    \"IndexSwap\": \"start\"\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:7071/api/PageCrawlerHttp",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "7071",
+					"path": [
+						"api",
+						"PageCrawlerHttp"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "PageCrawlerHttp swap end",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n   \"source\": \"test\",\r\n   \"urls\": [\r\n        \"https://www.catalyst.org/2020/08/10/racism-gender-pay-gap-women/\",\r\n        \"https://www.catalyst.org/2021/04/27/future-of-work-summit-europe-2021-takeaways/\"\r\n    ],\r\n    \"IndexSwap\": \"end\"\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:7071/api/PageCrawlerHttp",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "7071",
+					"path": [
+						"api",
+						"PageCrawlerHttp"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "PageCrawlerHttp JSON LD",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n   \"source\": \"jsonldtest\",\r\n   \"urls\": [\r\n        \"https://catalyst.contentstackapps.com/event/in-person-roundtable-unlocking-potential-the-power-of-employee-resource-groups\"\r\n    ]\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:7071/api/PageCrawlerHttp",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "7071",
+					"path": [
+						"api",
+						"PageCrawlerHttp"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "PageCrawlerHttp Azure",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "x-functions-key",
+						"value": "31dzcJNrIVa6_pQgfHfBYKR85SEZCnzHCn29TUochYfRAzFuoAftpg==",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n   \"source\": \"test\",\r\n   \"urls\": [\r\n        \"https://www.catalyst.org/2020/08/10/racism-gender-pay-gap-women/\",\r\n        \"https://www.catalyst.org/2021/04/27/future-of-work-summit-europe-2021-takeaways/\"\r\n    ]\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "https://catalystpocazurefunctions.azurewebsites.net/api/PageCrawlerHttp?code=31dzcJNrIVa6_pQgfHfBYKR85SEZCnzHCn29TUochYfRAzFuoAftpg==",
+					"protocol": "https",
+					"host": [
+						"catalystpocazurefunctions",
+						"azurewebsites",
+						"net"
+					],
+					"path": [
+						"api",
+						"PageCrawlerHttp"
+					],
+					"query": [
+						{
+							"key": "code",
+							"value": "31dzcJNrIVa6_pQgfHfBYKR85SEZCnzHCn29TUochYfRAzFuoAftpg=="
+						}
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}

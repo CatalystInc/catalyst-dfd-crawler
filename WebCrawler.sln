@@ -10,6 +10,7 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{23C0E99C-657F-4049-843D-D981683BC2D7}"
 	ProjectSection(SolutionItems) = preProject
 		AzureAISearch\catalyst-az-poc-index-schema.json = AzureAISearch\catalyst-az-poc-index-schema.json
+		Catalyst.postman_collection.json = Catalyst.postman_collection.json
 		README.md = README.md
 	EndProjectSection
 EndProject
