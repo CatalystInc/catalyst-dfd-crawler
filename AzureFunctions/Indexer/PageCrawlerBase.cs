@@ -3,6 +3,7 @@ using Azure.Search.Documents;
 using Azure.Search.Documents.Indexes;
 using Azure.Search.Documents.Indexes.Models;
 using Azure.Search.Documents.Models;
+using AzureFunctions.Models;
 using AzureSearchCrawler;
 using Google.Protobuf.WellKnownTypes;
 using HtmlAgilityPack;
@@ -230,7 +231,35 @@ namespace AzureFunctions.Indexer
 							searchDocument[config.TargetField] = convertedValue;
 						}
 					}
-				}
+
+					var facetsToken = jsonLd.SelectToken("facets");
+					if (facetsToken != null)
+					{
+						var facetList = facetsToken.ToObject<List<FacetModel>>();
+						if (facetList != null)
+						{
+                            foreach (var item in facetList)
+                            {
+								if (item.Indexable && !string.IsNullOrEmpty(item.FacetName) && item.FacetValues != null && item.FacetValues.Count > 0)
+								{
+									var fieldName = $"facet_{item.FacetName}";
+									searchDocument[fieldName] = item.FacetValues;
+								}
+                            }
+                        }
+					}
+
+                    // facetable date example
+                    var dateToken = jsonLd.SelectToken("@graph.[?(@.@type=='WebPage')].datePublished");
+                    if (dateToken != null && TryConvertValue(dateToken, "datetime", out object dateConvertedValue))
+                    {
+                        searchDocument["facet_publishedDate"] = dateConvertedValue;
+                    }
+
+					// A non-existent index field added into the searchDocument, will throw an exception
+					// but the process will continue crawling the next page					
+
+                }
 
 				return searchDocument;
 			}
