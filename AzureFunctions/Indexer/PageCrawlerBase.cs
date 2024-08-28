@@ -12,6 +12,7 @@ using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -57,8 +58,12 @@ namespace AzureFunctions.Indexer
 
 			var userAgent = configuration["UserAgent"] ?? "DefaultCrawlerBot/1.0";
 			_httpClient.DefaultRequestHeaders.Add("User-Agent", userAgent);
+			_httpClient.DefaultRequestHeaders.CacheControl = new CacheControlHeaderValue
+			{
+				NoCache = true
+			};
 
-			_searchServiceEndpoint = configuration["SearchServiceEndpoint"] ?? throw new ArgumentNullException(nameof(configuration), "SearchServiceEndpoint is missing");
+            _searchServiceEndpoint = configuration["SearchServiceEndpoint"] ?? throw new ArgumentNullException(nameof(configuration), "SearchServiceEndpoint is missing");
 			_searchApiKey = configuration["SearchApiKey"] ?? throw new ArgumentNullException(nameof(configuration), "SearchApiKey is missing");
 			_searchIndexAlias = configuration["SearchIndexAlias"] ?? throw new ArgumentNullException(nameof(configuration), "SearchIndexAlias is missing");
 			_searchIndexBaseName = configuration["SearchIndexBaseName"] ?? throw new ArgumentNullException(nameof(configuration), "SearchIndexBaseName is missing");
@@ -179,11 +184,24 @@ namespace AzureFunctions.Indexer
 		{
 			ArgumentNullException.ThrowIfNull(url);
 			ArgumentNullException.ThrowIfNull(source);
-			_logger.LogInformation("Crawling {Url} from source {Source}", url, source);
 
-			try
+            _logger.LogInformation("Crawling {Url} from source {Source}", url, source);
+
+            try
 			{
-				using var response = await _httpClient.GetAsync(url);
+                var fetchUrl = url;
+
+                // ensure fetching url using a timestamp within query string to avoid caching
+                if (url.IndexOf("?") >= 0)
+                {
+                    fetchUrl = $"{url}&t={DateTime.UtcNow.ToTimestamp().Seconds}";
+                }
+                else
+                {
+                    fetchUrl = $"{url}?t={DateTime.UtcNow.ToTimestamp().Seconds}";
+                }
+
+                using var response = await _httpClient.GetAsync(fetchUrl);
 				response.EnsureSuccessStatusCode();
 
 				var html = await response.Content.ReadAsStringAsync();
