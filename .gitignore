@@ -362,3 +362,4 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 /AzureFunctions/local.settings.json
+/AzureFunctions/Properties/launchSettings.json

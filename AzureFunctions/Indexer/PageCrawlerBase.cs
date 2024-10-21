@@ -3,6 +3,7 @@ using Azure.Search.Documents;
 using Azure.Search.Documents.Indexes;
 using Azure.Search.Documents.Indexes.Models;
 using Azure.Search.Documents.Models;
+using AzureFunctions.Cvent;
 using AzureFunctions.Models;
 using AzureSearchCrawler;
 using Google.Protobuf.WellKnownTypes;
@@ -31,7 +32,9 @@ namespace AzureFunctions.Indexer
 		private readonly int _maxRetries;
 		internal SearchClient _searchClient;
 		internal readonly SearchIndexClient _searchIndexClient;
-		private readonly TextExtractor _textExtractor;
+		private readonly IConfiguration _configuration;
+		private readonly ILoggerFactory _loggerFactory;
+        private readonly TextExtractor _textExtractor;
 		private readonly List<MetaTagConfig> _metaFieldMappings;
 		private readonly List<JsonLdConfig> _jsonLdMappings;
 		private readonly string _searchIndexBaseName;
@@ -41,19 +44,28 @@ namespace AzureFunctions.Indexer
 		private readonly bool _deleteOldIndexOnSwap;
 		private string _currentIndexName;
 		private string _newIndexName;
+		private string _eventFacetValue;
+		private string _contentTypeFacetName;
+		private string _tagFacetName;
+		private string _dateFacetName;
+		private string _eventTypeFacetName;
+		private readonly string _eventActiveStatus = "Active";
 
-		/// <summary>
-		/// Initializes a new instance of the <see cref="PageCrawlerBase"/> class.
-		/// </summary>
-		/// <param name="configuration">The configuration.</param>
-		/// <param name="loggerFactory">The logger factory.</param>
-		/// <exception cref="ArgumentNullException">Thrown when configuration or loggerFactory is null.</exception>
-		public PageCrawlerBase(IConfiguration configuration, ILoggerFactory loggerFactory)
+        /// <summary>
+        /// Initializes a new instance of the <see cref="PageCrawlerBase"/> class.
+        /// </summary>
+        /// <param name="configuration">The configuration.</param>
+        /// <param name="loggerFactory">The logger factory.</param>
+        /// <exception cref="ArgumentNullException">Thrown when configuration or loggerFactory is null.</exception>
+        public PageCrawlerBase(IConfiguration configuration, ILoggerFactory loggerFactory)
 		{
 			ArgumentNullException.ThrowIfNull(configuration);
 			ArgumentNullException.ThrowIfNull(loggerFactory);
 
-			_logger = loggerFactory.CreateLogger<PageCrawlerBase>();
+            _configuration = configuration;
+            _loggerFactory = loggerFactory;
+
+            _logger = loggerFactory.CreateLogger<PageCrawlerBase>();
 			_httpClient = new HttpClient();
 
 			var userAgent = configuration["UserAgent"] ?? "DefaultCrawlerBot/1.0";
@@ -69,7 +81,13 @@ namespace AzureFunctions.Indexer
 			_searchIndexBaseName = configuration["SearchIndexBaseName"] ?? throw new ArgumentNullException(nameof(configuration), "SearchIndexBaseName is missing");
 			_deleteOldIndexOnSwap = bool.Parse(Environment.GetEnvironmentVariable("DeleteOldIndexOnSwap") ?? "false");
 
-			_searchIndexClient = new SearchIndexClient(new Uri(_searchServiceEndpoint), new AzureKeyCredential(_searchApiKey));
+            _contentTypeFacetName = configuration["ContentTypeFacetName"] ?? throw new ArgumentNullException(nameof(configuration), "ContentTypeFacetName is missing");
+            _eventFacetValue = configuration["EventFacetValue"] ?? throw new ArgumentNullException(nameof(configuration), "EventFacetValue is missing");
+            _tagFacetName = configuration["TagFacetName"] ?? throw new ArgumentNullException(nameof(configuration), "TagFacetName is missing");
+            _dateFacetName = configuration["DateFacetName"] ?? throw new ArgumentNullException(nameof(configuration), "DateFacetName is missing");
+			_eventTypeFacetName = configuration["EventTypeFacetName"] ?? throw new ArgumentNullException(nameof(configuration), "EventTypeFacetName is missing");
+
+            _searchIndexClient = new SearchIndexClient(new Uri(_searchServiceEndpoint), new AzureKeyCredential(_searchApiKey));
 			InitializeIndexNames().Wait();
 
 			_maxConcurrency = int.Parse(configuration["CrawlerMaxConcurrency"] ?? "3");
@@ -82,7 +100,7 @@ namespace AzureFunctions.Indexer
 
 			_logger.LogInformation("Page Crawler initialized with User-Agent: {UserAgent}, MaxConcurrency: {MaxConcurrency}, MaxRetries: {MaxRetries}",
 				userAgent, _maxConcurrency, _maxRetries);
-		}
+        }
 
 		private async Task CreateAliasAsync(string indexName)
 		{
@@ -256,36 +274,194 @@ namespace AzureFunctions.Indexer
 						var facetList = facetsToken.ToObject<List<FacetModel>>();
 						if (facetList != null)
 						{
-                            foreach (var item in facetList)
-                            {
+							foreach (var item in facetList)
+							{
 								if (item.Indexable && !string.IsNullOrEmpty(item.FacetName) && item.FacetValues != null && item.FacetValues.Count > 0)
 								{
 									var fieldName = $"facet_{item.FacetName}";
 									searchDocument[fieldName] = item.FacetValues;
 								}
-                            }
-                        }
+							}
+						}
 					}
-
-                    // facetable date example
-                    var dateToken = jsonLd.SelectToken("@graph.[?(@.@type=='WebPage')].datePublished");
-                    if (dateToken != null && TryConvertValue(dateToken, "datetime", out object dateConvertedValue))
-                    {
-                        searchDocument["facet_publishedDate"] = dateConvertedValue;
-                    }
-
-					// A non-existent index field added into the searchDocument, will throw an exception
-					// but the process will continue crawling the next page					
-
+					// TODO: remove once dev testing is finished
+					AddTestData(url, jsonLd, searchDocument);
                 }
 
-				return searchDocument;
+                return searchDocument;
 			}
 			catch (Exception ex)
 			{
 				_logger.LogError(ex, "Unexpected error while crawling {Url}", url);
 				throw;
 			}
+		}
+
+		private void AddTestData(string url, JObject jsonLd, SearchDocument searchDocument)
+		{
+			var regionList = new List<string>
+			{
+				"Africa_blt160ea095f7fa106c",
+				"Asia_blte77ab6d04dd9d958",
+				"Caribbean_blta83bb8309c011296",
+				"Central_America_blt21f0bde8b43637da",
+				"Europe_blt94879048a52009fc",
+				"North_America_bltb9ee0bd03ae3ca71",
+				"Oceania_blt2afebce479589707",
+				"South_America_bltf8f6db16d90a3111"
+			};
+			var eventTypeList = new List<string>
+			{
+				"Virtual_blt9cb524692e7be8e6",
+				"Hybrid_bltfb073526168673ad",
+				"In_Person_blt3740597b9d1a007e",
+				"On_Demand_blt2d95c2d08a61d0f1"
+			};
+
+			var contentSubtypeList = new List<string>
+			{
+				"Report_bltd4c9dea74866a793",
+				"E_book_bltbb19441d044d82c0",
+				"Infographic_bltd49052262cdbfb8b",
+				"Reference_card_blt1d50e115b459b3a3",
+				"Podcast_blt36ab07a4709321e6",
+				"Video_blt0b0546bd6f9fdff8",
+				"DEI_Practice_bltf92702333f1691c0",
+				"Poster_blt4aa5829b9b6cde7c",
+				"Media_release_blte5ac68eb8acf0045",
+				"Case_study_bltd43b2a098685fd0e",
+				"Article_blt592afc887d65d620",
+				"Book_review_bltc22adba96e4729c6",
+				"Guide_blt46832264398f5b0a",
+				"Opinion_blt57e4c3d65673e27b",
+				"Q_and_A_blta3680fcba1b11d01",
+				"Course_blt2c6fcf14f8bcd4ba",
+				"Quiz_bltcb29dfaf5eba142e",
+				"Company_blog_blt8793984fecbc5198",
+				"Training_blt2a6950c98b9b33ab",
+				"Workbook_blt894793c6daabc32e",
+				"Webinar_bltb7dc56fbf8c0089c"
+			};
+
+			var topicList = new List<string>
+			{
+				"Workforce_trends_blt76a4594418a9c770",
+				"Inclusive_workplaces_blt36bad7f982b4f206",
+				"DEI_messaging_blt2b6dce3c1f0767ab",
+				"ERGs_blte5b8fd301d1651c3",
+				"Organizational_culture_blt467c137c69cc7940",
+				"Recruitment_and_retention_blt290075a6d010a592",
+				"DEI_governance_bltc288dbb7b956499a",
+				"Workplace_health_and_safety_blt09fa52a7d712814f",
+				"Career_equity_blte2ead71389c6dc55",
+				"Gender_partnership_blt4099e65560f6379a",
+				"Caretakers_blt1dd6c6d5a1448a2e",
+				"Race_ethnicity_and_culture_bltadfc60e50b85001d",
+				"Religion_blt0ed0e5142d5a65bf",
+				"LGBTQ_plus_blt90829cfe9af68b20",
+				"Neurodiversity_bltf0fbee81a8d77ece",
+				"Socio_economic_status_bltb1d7d87f2d15466b",
+				"Multigenerational_workplace_blt0e15a59848f1e78f",
+				"Gendered_ageism_blt61e85ca36efd0476",
+				"Emotional_tax_blt95baa7c0d7580fbe",
+				"Micro_aggressions_blt7a6c83226985d94b",
+				"Frontline_employees_blt06ef4a93c0a70d96"
+			};
+
+			var subtopicDict = new Dictionary<string, List<string>>
+			{
+				{ "Workforce_trends_blt76a4594418a9c770", new List<string>
+					{
+						"Flexible_work_bltce1c476a7e77ef9f",
+						"Artificial_Intelligence_blt34fcb50b58eeabcd",
+						"Techquity_blt8bc450470535f545"
+					}
+				},
+				{ "Inclusive_workplaces_blt36bad7f982b4f206", new List<string>
+					{
+						"Inclusive_leadership_bltf33d6e389f1c24f2",
+						"Psychological_safety_blt5fa4236242d7a9e2",
+						"Stereotypes_bias_bltfe29e88fde04e69d",
+						"Allyship_and_advocacy_blt3acc4381299cce43"
+					}
+				},
+				{ "DEI_governance_bltc288dbb7b956499a", new List<string>
+					{
+						"Affirmative_action_blt9f3199f5a80de4bb",
+						"ESG_blt41d9d3e40c8b84f3",
+						"Measurement_blt7e6abd937974a771"
+					}
+				},
+				{ "Career_equity_blte2ead71389c6dc55", new List<string>
+					{
+						"Pay_gap_and_trasparency_blt83978f4dcde0366b",
+						"Sponsorship_and_mentorship_blt17095610d4746aeb",
+						"Gender_representation_blt65ffd0821131c04a"
+					}
+				}
+			};
+
+			var facetAdded = false;
+            var facetValues = new List<string>();
+            if (url.IndexOf("/research") > 0)
+            {
+                searchDocument[_contentTypeFacetName] = new List<string> { "facet_Publication_blt8acf9af9e5e65236" };
+                facetAdded = true;
+
+                searchDocument["facet_Content_Subtype_bltf3546927f6207618"] = new List<string> { "facet_" + contentSubtypeList[GetRandomIndexPosition(contentSubtypeList)] };
+            }
+
+            if (url.IndexOf("/event") > 0)
+            {
+                searchDocument[_contentTypeFacetName] = new List<string> { "facet_Event_blt3464588e70baf655" };
+                facetAdded = true;
+
+                searchDocument["facet_Event_Type_blta4cbd29d70185dba"] = new List<string> { "facet_" + eventTypeList[GetRandomIndexPosition(eventTypeList)] };
+            }
+
+            if (url.IndexOf("/media") > 0 || url.IndexOf("/episode") > 0 || url.IndexOf("/podcast") > 0)
+            {
+                searchDocument[_contentTypeFacetName] = new List<string> { "facet_Multimedia_blt891f4dca60cfd4ae" };
+                facetAdded = true;
+            }
+
+            if (url.IndexOf("/bio") > 0)
+            {
+                searchDocument[_contentTypeFacetName] = new List<string> { "facet_People_bltb3771e544416e095" };
+                facetAdded = true;
+            }
+
+            if (!facetAdded)
+            {
+                searchDocument[_contentTypeFacetName] = new List<string> { "facet_Topic_bltd1177d959563848a" };
+
+                var mainTopic = topicList[GetRandomIndexPosition(topicList)];
+                searchDocument["facet_Topic_blt7c6fc000f2d86e9a"] = new List<string> { "facet_" + mainTopic };
+
+                if (subtopicDict.TryGetValue(mainTopic, out var subTopicList) && subTopicList != null)
+                {
+                    var subTopic = subTopicList[GetRandomIndexPosition(subTopicList)];
+                    searchDocument["facet_Subtopic_blt313a97fa5c14b04f"] = new List<string> { "facet_" + subTopic };
+                }
+            }
+
+            var dateToken = jsonLd.SelectToken("@graph.[?(@.@type=='WebPage')].datePublished");
+            if (dateToken != null && TryConvertValue(dateToken, "datetime", out object dateConvertedValue))
+            {
+                searchDocument["facet_Date_bltab4886af92871fb5"] = dateConvertedValue;
+            }
+
+            // all pages have a targeted region
+            searchDocument["facet_Region_blt13f9190ea706e42e"] = new List<string> { "facet_" + regionList[GetRandomIndexPosition(regionList)] };
+
+            // A non-existent index field added into the searchDocument, will throw an exception
+            // but the process will continue crawling the next page	
+        }
+
+        private int GetRandomIndexPosition(List<string> list)
+		{
+			var random = new Random(DateTime.UtcNow.ToTimestamp().Nanos);
+			return random.Next(0, list.Count);
 		}
 
 		/// <summary>
@@ -300,12 +476,10 @@ namespace AzureFunctions.Indexer
 
 			var results = new ConcurrentBag<SearchDocument>();
 
-			if (crawlRequest.IndexSwap == "start")
+            if (crawlRequest.IndexSwap == "start")
 			{
 				await StartIndexSwapAsync();
 			}
-
-
 
 			var indexName = string.IsNullOrEmpty(_newIndexName) ? _currentIndexName : _newIndexName;
 			_searchClient = new SearchClient(
@@ -313,6 +487,10 @@ namespace AzureFunctions.Indexer
 				indexName,
 				new AzureKeyCredential(_searchApiKey));
 
+			// Loads Cvent data and index
+			await ProcessCventInformation(crawlRequest.Source);
+
+			// Crawls pages, extract data and upload to index
 			if (crawlRequest.Urls != null && crawlRequest.Urls.Count > 0)
 			{
 				await Parallel.ForEachAsync(crawlRequest.Urls,
@@ -495,7 +673,99 @@ namespace AzureFunctions.Indexer
 			};
 		}
 
-		bool TryConvertValue(JToken token, string targetType, out object result)
+		async Task ProcessCventInformation(string source)
+		{
+			var cventAPI = new CventAPIService(_configuration, _loggerFactory);
+			var authorization = await cventAPI.GetAccessToken();
+
+			if (authorization != null)
+			{
+				var eventDocuments = new List<SearchDocument>();
+                var results = new List<SearchDocument>();
+				for (int attempt = 1; attempt <= _maxRetries; attempt++)
+				{
+					var eventsData = await cventAPI.GetEvents(accessToken: authorization.AccessToken);
+
+					if (eventsData?.Data?.Count > 0)
+					{
+						var dataMapper = new CventDataMapper(_configuration, _loggerFactory);
+                        foreach (var eventEntry in eventsData?.Data.Where(data =>
+                            !string.IsNullOrEmpty(data.Status) &&
+							data.Status.Equals(_eventActiveStatus, StringComparison.CurrentCultureIgnoreCase)))
+						{
+							var eventDetails = dataMapper.ToEventDetailsModel(eventEntry);
+
+							var searchDocument = new SearchDocument
+							{
+								["id"] = eventDetails.Id,
+								["type"] = eventDetails.Type,
+								["url"] = eventDetails.Url,
+								["title"] = eventDetails.Title,
+								["source"] = source,
+								["htmlContent"] = eventDetails.HtmlDescription,
+								["textContent"] = eventDetails.TextDescription,
+								[_contentTypeFacetName] = new List<string> { _eventFacetValue },
+								[_tagFacetName] = eventDetails.Tags,
+								[_dateFacetName] = eventDetails.StartDate
+                            };
+
+							if (!string.IsNullOrEmpty(eventDetails.EventTypeFacet))
+							{
+								searchDocument[_eventTypeFacetName] = new List<string> { eventDetails.EventTypeFacet };
+                            }
+
+							eventDocuments.Add(searchDocument);
+						}
+						break;
+					}
+					else
+					{
+						_logger.LogWarning($"Cvent processing: NO event data found, attempt: {attempt}");
+                        await Task.Delay(1000 * attempt); // Exponential backoff
+                    }
+				}
+
+                if (eventDocuments.Count > 0)
+                {
+                    await Parallel.ForEachAsync(eventDocuments,
+                        new ParallelOptions { MaxDegreeOfParallelism = _maxConcurrency },
+                        async (eventDocument, ct) =>
+                        {
+                            var searchDocument = await ProcessEventAsync(eventDocument["title"].ToString(), eventDocument["url"].ToString(), eventDocument, ct);
+                            await Task.Delay(100, ct); // Slow down to prevent rate limiting
+                            results.Add(searchDocument);
+                        });
+
+                    _logger.LogInformation("Indexed {Count} events from Cvent", results.Count);
+                }
+                else
+                {
+                    _logger.LogWarning("No events to index in request");
+                }
+            }
+			else
+			{
+				_logger.LogWarning("Cvent processing: could not get an access token.");
+			}
+        }
+
+        async Task<SearchDocument> ProcessEventAsync(string eventTitle, string eventUrl, SearchDocument document, CancellationToken cancellationToken)
+        {
+            try
+            {
+                await IndexSearchDocumentAsync(document, cancellationToken);
+                return document;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Error processing {eventUrl} for event: {eventTitle})", eventUrl, eventTitle);
+				_logger.LogError(ex, "Failed to process event {eventUrl}", eventUrl);
+				document["error"] = ex.Message;
+				return document;
+            }
+        }
+
+        bool TryConvertValue(JToken token, string targetType, out object result)
 		{
 			result = null;
 			try
@@ -761,8 +1031,8 @@ namespace AzureFunctions.Indexer
 				// Get the source index
 				var sourceIndex = await _searchIndexClient.GetIndexAsync(sourceIndexName);
 
-				// Create a new index with the same schema
-				var newIndex = new SearchIndex(targetIndexName)
+                // Create a new index with the same schema
+                var newIndex = new SearchIndex(targetIndexName)
 				{
 					Fields = sourceIndex.Value.Fields,
 					DefaultScoringProfile = sourceIndex.Value.DefaultScoringProfile,

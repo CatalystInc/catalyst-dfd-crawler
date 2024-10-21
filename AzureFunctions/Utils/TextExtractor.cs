@@ -45,6 +45,18 @@ namespace AzureSearchCrawler
 			};
 		}
 
+		public virtual PageContent ExtractEventContent(HtmlDocument doc)
+		{
+            ArgumentNullException.ThrowIfNull(doc);
+
+            return new PageContent
+            {
+                Title = ExtractTitle(doc),
+                TextContent = GetCleanedUpTextForXpath(doc, "//div"),
+                HtmlContent = ExtractDivContent(doc)
+            };
+        }
+
 		/// <summary>
 		/// Gets cleaned up text for the specified XPath.
 		/// </summary>
@@ -147,7 +159,12 @@ namespace AzureSearchCrawler
 			return doc.DocumentNode.SelectSingleNode("//body")?.InnerHtml ?? string.Empty;
 		}
 
-		[GeneratedRegex(@"(\r\n|\n)+")]
+        private string ExtractDivContent(HtmlDocument doc)
+        {
+            return doc.DocumentNode.SelectSingleNode("//div")?.InnerHtml ?? string.Empty;
+        }
+
+        [GeneratedRegex(@"(\r\n|\n)+")]
 		private static partial Regex NewlinesRegex();
 
 		[GeneratedRegex(@"[ \t]+")]
