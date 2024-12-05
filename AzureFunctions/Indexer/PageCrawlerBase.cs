@@ -290,7 +290,7 @@ namespace AzureFunctions.Indexer
 			}
 			catch (Exception ex)
 			{
-				_logger.LogError(ex, "Unexpected error while crawling {Url}", url);
+				_logger.LogError(ex, "Unexpected error while crawling {Url}. Error message: {message}", url, ex.Message);
 				throw;
 			}
 		}
@@ -464,7 +464,7 @@ namespace AzureFunctions.Indexer
 			}
 			catch (Exception ex)
 			{
-				_logger.LogError(ex, "Error indexing document for {Url}", document["url"]);
+				_logger.LogError(ex, "Error indexing document for {Url}. Message: {message}", document["url"], ex.Message);
 				throw;
 			}
 		}
@@ -591,8 +591,8 @@ namespace AzureFunctions.Indexer
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogWarning(ex, "Error processing {eventUrl} for event: {eventTitle})", eventUrl, eventTitle);
-				_logger.LogError(ex, "Failed to process event {eventUrl}", eventUrl);
+                _logger.LogError(ex, "Error processing {eventUrl} for event: {eventTitle}). Error message: {message}", eventUrl, eventTitle, ex.Message);
+				//_logger.LogError(ex, "Failed to process event {eventUrl}. Error message: {message}", eventUrl, ex.Message);
 				document["error"] = ex.Message;
 				return document;
             }

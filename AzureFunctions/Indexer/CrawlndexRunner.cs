@@ -188,7 +188,7 @@ namespace AzureFunctions.Indexer
 				}
 				catch (Exception ex)
 				{
-					_logger.LogError(ex, "Error sending message to Service Bus for sitemap: {SitemapSource}", sitemapSource);
+					_logger.LogError(ex, "Error sending message to Service Bus for sitemap: {SitemapSource}. Error message: {message}", sitemapSource, ex.Message);
 				}
 			}
 		}
@@ -230,7 +230,7 @@ namespace AzureFunctions.Indexer
 			}
 			catch (Exception ex)
 			{
-				_logger.LogError(ex, "Error sending IndexSwap: {SwapCommand} message for sitemap: {SitemapSource}", swapCommand, sitemapSource);
+				_logger.LogError(ex, "Error sending IndexSwap: {SwapCommand} message for sitemap: {SitemapSource}. Error message: {message}", swapCommand, sitemapSource, ex.Message);
 			}
 		}
 
