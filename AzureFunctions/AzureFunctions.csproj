@@ -12,6 +12,9 @@
     <None Remove="Skills\**" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="local.settings.json" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.18.1" />
     <PackageReference Include="Azure.Search.Documents" Version="11.6.0-beta.4" />
     <PackageReference Include="HtmlAgilityPack" Version="1.11.62" />
@@ -23,5 +26,11 @@
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Sdk" Version="1.17.4" />
     <PackageReference Include="Microsoft.Azure.WebJobs.Extensions.Http" Version="3.2.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="local.settings.json.backup">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
+    </None>
   </ItemGroup>
 </Project>

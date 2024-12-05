@@ -312,7 +312,7 @@ namespace AzureFunctions.Indexer
 				await StartIndexSwapAsync();
 			}
 
-			var indexName = string.IsNullOrEmpty(_newIndexName) ? _currentIndexName : _newIndexName;
+			var indexName = !string.IsNullOrEmpty(_currentIndexName) ? _currentIndexName : _newIndexName;
 			_searchClient = new SearchClient(
 				new Uri(_searchServiceEndpoint),
 				indexName,
