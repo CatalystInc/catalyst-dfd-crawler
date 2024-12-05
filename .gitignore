@@ -363,3 +363,4 @@ MigrationBackup/
 FodyWeavers.xsd
 /AzureFunctions/local.settings.json
 /AzureFunctions/Properties/launchSettings.json
+/AzureFunctions/local.settings.json.backup
