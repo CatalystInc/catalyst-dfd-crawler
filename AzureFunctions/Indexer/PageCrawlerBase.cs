@@ -313,6 +313,8 @@ namespace AzureFunctions.Indexer
 			}
 
 			var indexName = !string.IsNullOrEmpty(_currentIndexName) ? _currentIndexName : _newIndexName;
+			_logger.LogInformation("Selected index name: {indexName}.", indexName);
+
 			_searchClient = new SearchClient(
 				new Uri(_searchServiceEndpoint),
 				indexName,
@@ -479,7 +481,7 @@ namespace AzureFunctions.Indexer
 				}
 				catch (Exception ex) when (ex is not OperationCanceledException)
 				{
-					_logger.LogWarning(ex, "Error processing {Url} (Attempt {Attempt}/{MaxRetries})", url, attempt, _maxRetries);
+					_logger.LogError(ex, "Error processing {Url} (Attempt {Attempt}/{MaxRetries}). Error message: {error}", url, attempt, _maxRetries, ex.Message);
 					if (attempt == _maxRetries)
 					{
 						_logger.LogError(ex, "Failed to process {Url} after {MaxRetries} attempts", url, _maxRetries);
