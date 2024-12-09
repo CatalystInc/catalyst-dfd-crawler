@@ -88,19 +88,19 @@ namespace AzureFunctions.Indexer
 			}
 			catch (HttpRequestException e)
 			{
-				_logger.LogError(e, "Error downloading sitemap: {Url}", url);
+				_logger.LogError(e, "Error downloading sitemap: {Url}. Error: {message}", url, e.Message);
 			}
 			catch (System.Xml.XmlException e)
 			{
-				_logger.LogError(e, "Error parsing sitemap XML: {Url}", url);
+				_logger.LogError(e, "Error parsing sitemap XML: {Url}. Error: {message}", url, e.Message);
 			}
 			catch (FormatException e)
 			{
-				_logger.LogError(e, "Invalid sitemap format: {Url}", url);
+				_logger.LogError(e, "Invalid sitemap format: {Url}. Error: {message}", url, e.Message);
 			}
 			catch (Exception e)
 			{
-				_logger.LogError(e, "An unexpected error occurred while processing sitemap: {Url}", url);
+				_logger.LogError(e, "An unexpected error occurred while processing sitemap: {Url}. Error: {message}", url, e.Message);
 			}
 		}
 
