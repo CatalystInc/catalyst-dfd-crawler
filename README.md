@@ -158,10 +158,10 @@ To manually trigger a timer function outside its scheduled time:
    - Click "Test/Run" to manually execute the function
 
 ### More details on time-triggered functions
-[Azure Timer Function: How to Force Immediate Execution](https://kumarashwinhubert.com/azure-timer-function-how-to-force-immediate-execution-with-manual-triggering)
-[Working With Timer-Triggered Azure Functions](https://www.c-sharpcorner.com/article/working-with-timer-trigger-azure-functions)
-[Timer trigger for Azure Functions](https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-timer?tabs=in-process&pivots=programming-language-python)
-[Azure function app | Timer trigger run manually](https://learn.microsoft.com/en-us/answers/questions/1104850/azure-function-app-timer-trigger-run-manually)
+* [Azure Timer Function: How to Force Immediate Execution](https://kumarashwinhubert.com/azure-timer-function-how-to-force-immediate-execution-with-manual-triggering)
+* [Working With Timer-Triggered Azure Functions](https://www.c-sharpcorner.com/article/working-with-timer-trigger-azure-functions)
+* [Timer trigger for Azure Functions](https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-timer?tabs=in-process&pivots=programming-language-python)
+* [Azure function app | Timer trigger run manually](https://learn.microsoft.com/en-us/answers/questions/1104850/azure-function-app-timer-trigger-run-manually)
 
 
 ## Configuration items template
