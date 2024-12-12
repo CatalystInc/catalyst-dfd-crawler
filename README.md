@@ -142,7 +142,27 @@ Each environment has it's own Azure Resource Group. Each resource group has it's
 
 [rg-dfd-prod-000](https://portal.azure.com/#@catalyst.org/resource/subscriptions/867e00ef-3f48-4b6b-acac-c259c5cbde65/resourceGroups/rg-dfd-prod-000/overview)
 
-()
+## How to trigger indexing manually from Azure Portal
+There are several ways to trigger a timer Azure function:
+
+### Scheduled Execution
+
+By default, timer-triggered Azure functions run on a schedule defined by a CRON expression. For example, to run a function every 5 minutes, you would use the CRON expression "0 */5 * * * *"[3].
+
+### Manual Triggering
+
+To manually trigger a timer function outside its scheduled time:
+**Use the Azure Portal**:
+   - Navigate to your function in the Azure portal (open function app -> Overview -> find CrawlIndexRunner & click on it)
+   - Select "Code + Test"
+   - Click "Test/Run" to manually execute the function
+
+### More details on time-triggered functions
+[Azure Timer Function: How to Force Immediate Execution](https://kumarashwinhubert.com/azure-timer-function-how-to-force-immediate-execution-with-manual-triggering)
+[Working With Timer-Triggered Azure Functions](https://www.c-sharpcorner.com/article/working-with-timer-trigger-azure-functions)
+[Timer trigger for Azure Functions](https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-timer?tabs=in-process&pivots=programming-language-python)
+[Azure function app | Timer trigger run manually](https://learn.microsoft.com/en-us/answers/questions/1104850/azure-function-app-timer-trigger-run-manually)
+
 
 ## Configuration items template
 
