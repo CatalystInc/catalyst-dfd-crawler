@@ -231,7 +231,6 @@ namespace AzureFunctions.Indexer
 
 				string uniqueId = GenerateUrlUniqueId(url);
 				//var jsonLd = ExtractJsonLd(doc);
-				var jsonLd = ExtractJsonLd(html);
 
 				var searchDocument = new SearchDocument
 				{
@@ -256,37 +255,45 @@ namespace AzureFunctions.Indexer
 					}
 				}
 
-
-				if (jsonLd != null)
+				try
 				{
-					foreach (var config in _jsonLdMappings)
+					var jsonLd = ExtractJsonLd(html);
+					if (jsonLd != null)
 					{
-						var token = jsonLd.SelectToken(config.SourceElementPath);
-						if (token != null && !string.IsNullOrEmpty(config.TargetType) && TryConvertValue(token, config.TargetType, out object convertedValue))
+						foreach (var config in _jsonLdMappings)
 						{
-							searchDocument[config.TargetField] = convertedValue;
-						}
-					}
-
-					var facetsToken = jsonLd.SelectToken("facets");
-					if (facetsToken != null)
-					{
-						var facetList = facetsToken.ToObject<List<FacetModel>>();
-						if (facetList != null)
-						{
-							foreach (var item in facetList)
+							var token = jsonLd.SelectToken(config.SourceElementPath);
+							if (token != null && !string.IsNullOrEmpty(config.TargetType) &&
+							    TryConvertValue(token, config.TargetType, out object convertedValue))
 							{
-								if (item.Indexable && !string.IsNullOrEmpty(item.FacetName) && item.FacetValues != null && item.FacetValues.Count > 0)
+								searchDocument[config.TargetField] = convertedValue;
+							}
+						}
+
+						var facetsToken = jsonLd.SelectToken("facets");
+						if (facetsToken != null)
+						{
+							var facetList = facetsToken.ToObject<List<FacetModel>>();
+							if (facetList != null)
+							{
+								foreach (var item in facetList)
 								{
-									var fieldName = $"facet_{item.FacetName}";
-									searchDocument[fieldName] = item.FacetValues;
+									if (item.Indexable && !string.IsNullOrEmpty(item.FacetName) &&
+									    item.FacetValues != null && item.FacetValues.Count > 0)
+									{
+										var fieldName = $"facet_{item.FacetName}";
+										searchDocument[fieldName] = item.FacetValues;
+									}
 								}
 							}
 						}
 					}
-                }
+				} catch (Exception ex)
+				{
+					_logger.LogError(ex, "Error processing JSON-LD for {Url}. Error message: {message}", url, ex.Message);
+				}
 
-                return searchDocument;
+				return searchDocument;
 			}
 			catch (Exception ex)
 			{
@@ -373,7 +380,7 @@ namespace AzureFunctions.Indexer
 			_logger.LogInformation($"New index {_newIndexName} created");
 		}
 
-		public static JObject ExtractJsonLd(string html)
+		public static JObject? ExtractJsonLd(string html)
 		{
 			var regex = new Regex(@"<script[^>]*type\s*=\s*[""']application/ld\+json[""'][^>]*>(.*?)</script>",
 							  RegexOptions.Singleline | RegexOptions.IgnoreCase);
