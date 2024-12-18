@@ -290,7 +290,7 @@ namespace AzureFunctions.Indexer
 					}
 				} catch (Exception ex)
 				{
-					_logger.LogError(ex, "Error processing JSON-LD for {Url}. Error message: {message}", url, ex.Message);
+					_logger.LogWarning(ex, "Error processing JSON-LD for {Url}. Error message: {message}", url, ex.Message);
 				}
 
 				return searchDocument;
