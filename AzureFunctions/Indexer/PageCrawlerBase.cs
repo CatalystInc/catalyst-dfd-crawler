@@ -328,7 +328,7 @@ namespace AzureFunctions.Indexer
 				new AzureKeyCredential(_searchApiKey));
 
 			// Loads Cvent data and index
-			await ProcessCventInformation(crawlRequest.Source);
+			// await ProcessCventInformation(crawlRequest.Source);
 
 			// Crawls pages, extract data and upload to index
 			if (crawlRequest.Urls != null && crawlRequest.Urls.Count > 0)
