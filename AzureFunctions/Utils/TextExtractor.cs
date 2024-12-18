@@ -41,7 +41,7 @@ namespace AzureSearchCrawler
 			{
 				Title = ExtractTitle(doc),
 				TextContent = GetCleanedUpTextForXpath(doc, "//body"),
-				HtmlContent = ExtractHtmlContent(doc)
+				HtmlContent = ""//ExtractHtmlContent(doc)
 			};
 		}
 
@@ -53,7 +53,7 @@ namespace AzureSearchCrawler
             {
                 Title = ExtractTitle(doc),
                 TextContent = GetCleanedUpTextForXpath(doc, "//div"),
-                HtmlContent = ExtractDivContent(doc)
+                HtmlContent = ""//ExtractDivContent(doc)
             };
         }
 
