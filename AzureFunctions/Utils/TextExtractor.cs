@@ -151,6 +151,12 @@ namespace AzureSearchCrawler
 
 		private string ExtractTitle(HtmlDocument doc)
 		{
+			var titleNode = doc.DocumentNode.SelectSingleNode("//meta[@name='title']");
+			var title = titleNode?.Attributes["content"];
+			if (title != null)
+			{
+				return title.Value;
+			}
 			return doc.DocumentNode.SelectSingleNode("//title")?.InnerText?.Trim() ?? string.Empty;
 		}
 
