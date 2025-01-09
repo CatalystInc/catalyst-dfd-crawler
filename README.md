@@ -214,6 +214,11 @@ These values need to be set in the Azure Function configuration (environment var
       "TargetType": "String"
     },
     {
+      "SourceMetaTag": "supporter_only",
+      "TargetField": "meta_supporter_only",
+      "TargetType": "String"
+    },
+    {
       "SourceMetaTag": "og:description",
       "TargetField": "meta_description",
       "TargetType": "String"
