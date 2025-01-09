@@ -131,6 +131,19 @@
       "synonymMaps": []
     },
     {
+      "name": "meta_supporter_only",
+      "type": "Edm.String",
+      "key": false,
+      "retrievable": true,
+      "stored": true,
+      "searchable": true,
+      "filterable": true,
+      "sortable": true,
+      "facetable": false,
+      "analyzer": "standard.lucene",
+      "synonymMaps": []
+    },
+    {
       "name": "meta_description",
       "type": "Edm.String",
       "key": false,
