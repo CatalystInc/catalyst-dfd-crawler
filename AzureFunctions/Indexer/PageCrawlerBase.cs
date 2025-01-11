@@ -50,6 +50,7 @@ namespace AzureFunctions.Indexer
 		private string _dateFacetName;
 		private string _eventTypeFacetName;
 		private readonly string _eventActiveStatus = "Active";
+		private readonly IndexSwapCommandMessageSender _indexSwapCommandMessageSender;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="PageCrawlerBase"/> class.
@@ -97,6 +98,13 @@ namespace AzureFunctions.Indexer
 
 			_metaFieldMappings = configuration.GetSection("MetaFieldMappings").Get<List<MetaTagConfig>>();
 			_jsonLdMappings = configuration.GetSection("JsonLdMappings").Get<List<JsonLdConfig>>();
+
+			// Add this near the end of the constructor
+			_indexSwapCommandMessageSender = new IndexSwapCommandMessageSender(
+				loggerFactory.CreateLogger<IndexSwapCommandMessageSender>(),
+				configuration["ServiceBusConnection"],
+				configuration["ServiceBusQueueName"]
+			);
 
 			_logger.LogInformation("Page Crawler initialized with User-Agent: {UserAgent}, MaxConcurrency: {MaxConcurrency}, MaxRetries: {MaxRetries}",
 				userAgent, _maxConcurrency, _maxRetries);
@@ -349,6 +357,10 @@ namespace AzureFunctions.Indexer
 				_logger.LogInformation("No pages to crawl in request");
 			}
 
+			// all done, send swap command message
+			await _indexSwapCommandMessageSender.SendSwapCommandMessage(IndexConst.INDEX_END, crawlRequest.Source);
+
+			// handle index swap message
 			if (crawlRequest.IndexSwap == IndexConst.INDEX_END)
 			{
 				await CompleteIndexSwapAsync();

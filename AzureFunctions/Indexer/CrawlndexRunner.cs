@@ -25,6 +25,7 @@ namespace AzureFunctions.Indexer
 		private readonly ServiceBusClient _serviceBusClient;
 		private readonly ServiceBusSender _sender;
 		private readonly string _sitemapsRootUrl;
+		private readonly IndexSwapCommandMessageSender _indexSwapCommandMessageSender;
 
 		/// <summary>
 		/// Initializes a new instance of the CrawlIndexRunner class.
@@ -44,6 +45,11 @@ namespace AzureFunctions.Indexer
 
 			_serviceBusClient = new ServiceBusClient(_serviceBusConnectionString);
 			_sender = _serviceBusClient.CreateSender(_queueName);
+			_indexSwapCommandMessageSender = new IndexSwapCommandMessageSender(
+				loggerFactory.CreateLogger<IndexSwapCommandMessageSender>(),
+				_serviceBusConnectionString,
+				_queueName
+			);
 		}
 
 		/// <summary>
@@ -65,7 +71,7 @@ namespace AzureFunctions.Indexer
 				string xmlContent = await _httpClient.GetStringAsync(url);
 				XDocument doc = XDocument.Parse(xmlContent);
 
-				await SendSwapCommandMessage(IndexConst.INDEX_START, url);
+				await _indexSwapCommandMessageSender.SendSwapCommandMessage(IndexConst.INDEX_START, url);
 
 				XNamespace ns = doc.Root?.GetDefaultNamespace() ?? XNamespace.None;
 
@@ -84,8 +90,6 @@ namespace AzureFunctions.Indexer
 					default:
 						throw new FormatException("The XML does not appear to be a valid sitemap or sitemap index.");
 				}
-
-				await SendSwapCommandMessage(IndexConst.INDEX_END, url);
 			}
 			catch (HttpRequestException e)
 			{
@@ -206,34 +210,34 @@ namespace AzureFunctions.Indexer
 			await ProcessSitemapAsync(_sitemapsRootUrl);
 		}
 
-		/// <summary>
-		/// Sends a swap command message to Azure Service Bus.
-		/// </summary>
-		/// <param name="swapCommand">The swap command ("start" or "end").</param>
-		/// <param name="sitemapSource">The source URL of the sitemap.</param>
-		/// <returns>A task representing the asynchronous operation.</returns>
-		private async Task SendSwapCommandMessage(string swapCommand, string sitemapSource)
-		{
-			if (string.IsNullOrWhiteSpace(swapCommand) || string.IsNullOrWhiteSpace(sitemapSource))
-			{
-				_logger.LogError("Invalid swap command or sitemap source provided.");
-				return;
-			}
+		// /// <summary>
+		// /// Sends a swap command message to Azure Service Bus.
+		// /// </summary>
+		// /// <param name="swapCommand">The swap command ("start" or "end").</param>
+		// /// <param name="sitemapSource">The source URL of the sitemap.</param>
+		// /// <returns>A task representing the asynchronous operation.</returns>
+		// private async Task SendSwapCommandMessage(string swapCommand, string sitemapSource)
+		// {
+		// 	if (string.IsNullOrWhiteSpace(swapCommand) || string.IsNullOrWhiteSpace(sitemapSource))
+		// 	{
+		// 		_logger.LogError("Invalid swap command or sitemap source provided.");
+		// 		return;
+		// 	}
 
-			var message = new { source = sitemapSource, indexSwap = swapCommand };
-			var messageBody = JsonSerializer.Serialize(message);
-			var serviceBusMessage = new ServiceBusMessage(messageBody);
+		// 	var message = new { source = sitemapSource, indexSwap = swapCommand };
+		// 	var messageBody = JsonSerializer.Serialize(message);
+		// 	var serviceBusMessage = new ServiceBusMessage(messageBody);
 
-			try
-			{
-				await _sender.SendMessageAsync(serviceBusMessage);
-				_logger.LogInformation("Sent IndexSwap: {SwapCommand} message for sitemap: {SitemapSource}", swapCommand, sitemapSource);
-			}
-			catch (Exception ex)
-			{
-				_logger.LogError(ex, "Error sending IndexSwap: {SwapCommand} message for sitemap: {SitemapSource}. Error message: {message}", swapCommand, sitemapSource, ex.Message);
-			}
-		}
+		// 	try
+		// 	{
+		// 		await _sender.SendMessageAsync(serviceBusMessage);
+		// 		_logger.LogInformation("Sent IndexSwap: {SwapCommand} message for sitemap: {SitemapSource}", swapCommand, sitemapSource);
+		// 	}
+		// 	catch (Exception ex)
+		// 	{
+		// 		_logger.LogError(ex, "Error sending IndexSwap: {SwapCommand} message for sitemap: {SitemapSource}. Error message: {message}", swapCommand, sitemapSource, ex.Message);
+		// 	}
+		// }
 
 		/// <summary>
 		/// Asynchronously releases the unmanaged resources used by the CrawlIndexRunner.
