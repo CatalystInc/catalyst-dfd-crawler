@@ -65,7 +65,7 @@ namespace AzureFunctions.Indexer
 				string xmlContent = await _httpClient.GetStringAsync(url);
 				XDocument doc = XDocument.Parse(xmlContent);
 
-				await SendSwapCommandMessage(IndexConst.INDEX_START, url);q
+				await SendSwapCommandMessage(IndexConst.INDEX_START, url);
 
 				XNamespace ns = doc.Root?.GetDefaultNamespace() ?? XNamespace.None;
 
