@@ -314,7 +314,7 @@ namespace AzureFunctions.Indexer
 
 			var results = new ConcurrentBag<SearchDocument>();
 
-            if (crawlRequest.IndexSwap == "start")
+            if (crawlRequest.IndexSwap == IndexConst.INDEX_START)
 			{
 				await StartIndexSwapAsync();
 			}
@@ -349,7 +349,7 @@ namespace AzureFunctions.Indexer
 				_logger.LogInformation("No pages to crawl in request");
 			}
 
-			if (crawlRequest.IndexSwap == "end")
+			if (crawlRequest.IndexSwap == IndexConst.INDEX_END)
 			{
 				await CompleteIndexSwapAsync();
 			}
