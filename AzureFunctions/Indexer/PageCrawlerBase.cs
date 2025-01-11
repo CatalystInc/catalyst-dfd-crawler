@@ -314,12 +314,12 @@ namespace AzureFunctions.Indexer
 
 			var results = new ConcurrentBag<SearchDocument>();
 
-            if (crawlRequest.IndexSwap == "start")
+            if (crawlRequest.IndexSwap == IndexConst.INDEX_START)
 			{
 				await StartIndexSwapAsync();
 			}
 
-			var indexName = !string.IsNullOrEmpty(_currentIndexName) ? _currentIndexName : _newIndexName;
+			var indexName = string.IsNullOrEmpty(_newIndexName) ? _currentIndexName : _newIndexName;
 			_logger.LogInformation("Selected index name: {indexName}.", indexName);
 
 			_searchClient = new SearchClient(
@@ -349,7 +349,7 @@ namespace AzureFunctions.Indexer
 				_logger.LogInformation("No pages to crawl in request");
 			}
 
-			if (crawlRequest.IndexSwap == "end")
+			if (crawlRequest.IndexSwap == IndexConst.INDEX_END)
 			{
 				await CompleteIndexSwapAsync();
 			}

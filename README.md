@@ -45,7 +45,7 @@ The web crawler system is designed to efficiently index web content into Azure C
   - Handles both sitemap index files and regular sitemaps
   - Batches URLs (up to 100 URLs per batch)
   - Sends URL batches to Azure Service Bus queue
-  - Manages index core switching through "begin" and "end" swap commands
+  - Manages index core switching through "start" and "end" swap commands
 
 ### 2. PageCrawlerQueue (Processor)
 
@@ -68,9 +68,9 @@ The web crawler system is designed to efficiently index web content into Azure C
 
 ### 4. Index Core Switching Process
 
-1. Crawling Begins:
+1. Crawling Starts:
    - Creates new index core: `{indexBaseName}-{timestamp}`
-   - Initiated by "begin" swap command
+   - Initiated by "start" swap command
 2. During Crawling:
    - New content indexed to new core
    - Existing core continues serving searches

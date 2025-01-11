@@ -65,18 +65,19 @@ namespace AzureFunctions.Indexer
 				string xmlContent = await _httpClient.GetStringAsync(url);
 				XDocument doc = XDocument.Parse(xmlContent);
 
-				await SendSwapCommandMessage("begin", url);
+				await SendSwapCommandMessage(IndexConst.INDEX_START, url);
 
 				XNamespace ns = doc.Root?.GetDefaultNamespace() ?? XNamespace.None;
 
 				switch (doc.Root?.Name.LocalName)
 				{
+					// this is for if there was a sitempaindex, in which case it will recursively processed for each sitemap
 					case "sitemapindex":
 						_logger.LogInformation("Processing sitemap index: {Url}", url);
 						await ProcessSitemapIndexAsync(doc, ns);
 						break;
 					case "urlset":
-						_logger.LogInformation("Processing sitemap: {Url}", url);
+						_logger.LogInformation("Processing urlset: {Url}", url);
 						List<string> urls = ExtractUrlsFromSitemap(doc, ns);
 						await ProcessSitemapUrlsAsync(url, urls);
 						break;
@@ -84,7 +85,7 @@ namespace AzureFunctions.Indexer
 						throw new FormatException("The XML does not appear to be a valid sitemap or sitemap index.");
 				}
 
-				await SendSwapCommandMessage("end", url);
+				await SendSwapCommandMessage(IndexConst.INDEX_END, url);
 			}
 			catch (HttpRequestException e)
 			{
@@ -208,7 +209,7 @@ namespace AzureFunctions.Indexer
 		/// <summary>
 		/// Sends a swap command message to Azure Service Bus.
 		/// </summary>
-		/// <param name="swapCommand">The swap command ("begin" or "end").</param>
+		/// <param name="swapCommand">The swap command ("start" or "end").</param>
 		/// <param name="sitemapSource">The source URL of the sitemap.</param>
 		/// <returns>A task representing the asynchronous operation.</returns>
 		private async Task SendSwapCommandMessage(string swapCommand, string sitemapSource)

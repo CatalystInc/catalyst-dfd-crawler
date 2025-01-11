@@ -32,7 +32,7 @@
 - [x] Test handling HTTP request failures
 - [x] Test handling network timeout
 - [ ] Test processing large sitemap (performance test)
-- [ ] Test swap command messages are sent correctly (begin/end)
+- [ ] Test swap command messages are sent correctly (start/end)
 
 ### Integration Tests
 
