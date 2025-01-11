@@ -71,12 +71,13 @@ namespace AzureFunctions.Indexer
 
 				switch (doc.Root?.Name.LocalName)
 				{
+					// this is for if there was a sitempaindex, in which case it will recursively processed for each sitemap
 					case "sitemapindex":
 						_logger.LogInformation("Processing sitemap index: {Url}", url);
 						await ProcessSitemapIndexAsync(doc, ns);
 						break;
 					case "urlset":
-						_logger.LogInformation("Processing sitemap: {Url}", url);
+						_logger.LogInformation("Processing urlset: {Url}", url);
 						List<string> urls = ExtractUrlsFromSitemap(doc, ns);
 						await ProcessSitemapUrlsAsync(url, urls);
 						break;
