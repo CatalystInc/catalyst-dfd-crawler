@@ -178,11 +178,13 @@ namespace AzureFunctions.Indexer
 			const int batchSize = 100;
 			var batches = urls.Select((url, index) => new { url, index })
 							  .GroupBy(x => x.index / batchSize)
-							  .Select(g => g.Select(x => x.url).ToList());
+							  .Select(g => g.Select(x => x.url).ToList())
+							  .ToList();
 
-			foreach (var batch in batches)
+			for (int i = 0; i < batches.Count; i++)
 			{
-				var message = new { source = sitemapSource, urls = batch };
+				var batch = batches[i];
+				var message = new { source = sitemapSource, urls = batch, isLastBatch = (i == batches.Count - 1) };
 				var messageBody = JsonSerializer.Serialize(message);
 				var serviceBusMessage = new ServiceBusMessage(messageBody);
 

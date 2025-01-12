@@ -356,8 +356,12 @@ namespace AzureFunctions.Indexer
 				_logger.LogInformation("No pages to crawl in request");
 			}
 
+
 			// all done, send swap command message
-			await _indexSwapCommandMessageSender.SendSwapCommandMessage(IndexConst.INDEX_END, crawlRequest.Source);
+			if (crawlRequest.IsLastBatch) {
+				_logger.LogInformation("Sending swap command message for end");
+				await _indexSwapCommandMessageSender.SendSwapCommandMessage(IndexConst.INDEX_END, crawlRequest.Source);
+			}
 
 			// handle index swap message
 			if (crawlRequest.IndexSwap == IndexConst.INDEX_END)
