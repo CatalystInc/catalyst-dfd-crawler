@@ -99,7 +99,6 @@ namespace AzureFunctions.Indexer
 			_metaFieldMappings = configuration.GetSection("MetaFieldMappings").Get<List<MetaTagConfig>>();
 			_jsonLdMappings = configuration.GetSection("JsonLdMappings").Get<List<JsonLdConfig>>();
 
-			// Add this near the end of the constructor
 			_indexSwapCommandMessageSender = new IndexSwapCommandMessageSender(
 				loggerFactory.CreateLogger<IndexSwapCommandMessageSender>(),
 				configuration["ServiceBusConnection"],

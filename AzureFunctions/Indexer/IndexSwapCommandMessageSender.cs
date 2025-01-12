@@ -12,7 +12,7 @@ namespace AzureFunctions.Indexer
         private readonly ServiceBusClient _serviceBusClient;
         private readonly ServiceBusSender _sender;
 
-        public SwapCommandMessageSender(
+        public IndexSwapCommandMessageSender(
             ILogger<IndexSwapCommandMessageSender> logger,
             string serviceBusConnectionString,
             string queueName)
