@@ -174,8 +174,7 @@ namespace AzureFunctions.Indexer
 			const int batchSize = 100;
 			var batches = urls.Select((url, index) => new { url, index })
 							  .GroupBy(x => x.index / batchSize)
-							  .Select(g => g.Select(x => x.url).ToList())
-							  .ToList();
+							  .Select(g => g.Select(x => x.url).ToList());
 
 			foreach (var batch in batches)
 			{
