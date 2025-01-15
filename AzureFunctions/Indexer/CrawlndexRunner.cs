@@ -1,50 +1,37 @@
-﻿using Azure.Messaging.ServiceBus;
-using Microsoft.Azure.Functions.Worker;
+﻿using Microsoft.Azure.Functions.Worker;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Net.Http;
-using System.Text.Json;
-using System.Threading.Tasks;
 using System.Xml.Linq;
 
 namespace AzureFunctions.Indexer
 {
-	/// <summary>
-	/// Represents a runner for crawling and processing sitemaps, sending URLs to Azure Service Bus for indexing.
-	/// </summary>
-	public class CrawlIndexRunner : IAsyncDisposable
+    /// <summary>
+    /// Represents a runner for crawling and processing sitemaps, sending URLs to Azure Service Bus for indexing.
+    /// </summary>
+    public class CrawlIndexRunner
 	{
 		private readonly ILogger<CrawlIndexRunner> _logger;
-		private readonly string _serviceBusConnectionString;
-		private readonly string _queueName;
 		private readonly string _schedule;
 		private readonly HttpClient _httpClient;
-		private readonly ServiceBusClient _serviceBusClient;
-		private readonly ServiceBusSender _sender;
 		private readonly string _sitemapsRootUrl;
+		private readonly PageCrawlerQueue _queue;
 
-		/// <summary>
-		/// Initializes a new instance of the CrawlIndexRunner class.
-		/// </summary>
-		/// <param name="loggerFactory">The factory for creating loggers.</param>
-		/// <param name="configuration">The configuration containing necessary settings.</param>
-		/// <param name="httpClient">The HTTP client for making web requests.</param>
-		/// <exception cref="ArgumentNullException">Thrown if any required parameter is null.</exception>
-		public CrawlIndexRunner(ILoggerFactory loggerFactory, IConfiguration configuration, HttpClient httpClient)
+        /// <summary>
+        /// Initializes a new instance of the CrawlIndexRunner class.
+        /// </summary>
+        /// <param name="loggerFactory">The factory for creating loggers.</param>
+        /// <param name="configuration">The configuration containing necessary settings.</param>
+        /// <param name="httpClient">The HTTP client for making web requests.</param>
+        /// <exception cref="ArgumentNullException">Thrown if any required parameter is null.</exception>
+        public CrawlIndexRunner(ILoggerFactory loggerFactory, IConfiguration configuration, HttpClient httpClient, PageCrawlerQueue queue)
 		{
 			_logger = loggerFactory?.CreateLogger<CrawlIndexRunner>() ?? throw new ArgumentNullException(nameof(loggerFactory));
-			_serviceBusConnectionString = configuration?["ServiceBusConnection"] ?? throw new ArgumentNullException(nameof(configuration), "ServiceBusConnection configuration is missing");
-			_queueName = configuration["ServiceBusQueueName"] ?? throw new ArgumentNullException(nameof(configuration), "ServiceBusQueueName configuration is missing");
 			_schedule = configuration["CrawlIndexSchedule"] ?? throw new ArgumentNullException(nameof(configuration), "CrawlIndexSchedule configuration is missing");
 			_sitemapsRootUrl = configuration["SitemapsRootUrl"] ?? throw new ArgumentNullException(nameof(configuration), "SitemapsRootUrl configuration is missing");
 			_httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+			_queue = queue;
 
-			_serviceBusClient = new ServiceBusClient(_serviceBusConnectionString);
-			_sender = _serviceBusClient.CreateSender(_queueName);
-		}
+        }
 
 		/// <summary>
 		/// Processes a sitemap or sitemap index at the given URL.
@@ -62,12 +49,12 @@ namespace AzureFunctions.Indexer
 			try
 			{
 				_logger.LogInformation("Processing sitemap: {Url}", url);
-				string xmlContent = await _httpClient.GetStringAsync(url);
-				XDocument doc = XDocument.Parse(xmlContent);
+				var xmlContent = await _httpClient.GetStringAsync(url);
+				var doc = XDocument.Parse(xmlContent);
 
-				await SendSwapCommandMessage(IndexConst.INDEX_START, url);
+                await _queue.StartIndexSwapAsync();
 
-				XNamespace ns = doc.Root?.GetDefaultNamespace() ?? XNamespace.None;
+                XNamespace ns = doc.Root?.GetDefaultNamespace() ?? XNamespace.None;
 
 				switch (doc.Root?.Name.LocalName)
 				{
@@ -85,8 +72,8 @@ namespace AzureFunctions.Indexer
 						throw new FormatException("The XML does not appear to be a valid sitemap or sitemap index.");
 				}
 
-				await SendSwapCommandMessage(IndexConst.INDEX_END, url);
-			}
+                await _queue.CompleteIndexSwapAsync();
+            }
 			catch (HttpRequestException e)
 			{
 				_logger.LogError(e, "Error downloading sitemap: {Url}. Error: {message}", url, e.Message);
@@ -171,27 +158,9 @@ namespace AzureFunctions.Indexer
 
 			_logger.LogInformation("Processing {UrlCount} URLs from sitemap: {SitemapSource}", urls.Count, sitemapSource);
 
-			const int batchSize = 100;
-			var batches = urls.Select((url, index) => new { url, index })
-							  .GroupBy(x => x.index / batchSize)
-							  .Select(g => g.Select(x => x.url).ToList());
+			var crawlRequest = new CrawlRequest() { Source = sitemapSource, Urls = urls };
 
-			foreach (var batch in batches)
-			{
-				var message = new { source = sitemapSource, urls = batch };
-				var messageBody = JsonSerializer.Serialize(message);
-				var serviceBusMessage = new ServiceBusMessage(messageBody);
-
-				try
-				{
-					await _sender.SendMessageAsync(serviceBusMessage);
-					_logger.LogInformation("Sent batch of {BatchCount} URLs to Service Bus queue for sitemap: {SitemapSource}", batch.Count, sitemapSource);
-				}
-				catch (Exception ex)
-				{
-					_logger.LogError(ex, "Error sending message to Service Bus for sitemap: {SitemapSource}. Error message: {message}", sitemapSource, ex.Message);
-				}
-			}
+			await _queue.CrawlPagesAsync(crawlRequest);
 		}
 
 		/// <summary>
@@ -204,51 +173,6 @@ namespace AzureFunctions.Indexer
 		{
 			_logger.LogInformation("CrawlIndexRunner function executed at: {CurrentTime}", DateTime.UtcNow);
 			await ProcessSitemapAsync(_sitemapsRootUrl);
-		}
-
-		/// <summary>
-		/// Sends a swap command message to Azure Service Bus.
-		/// </summary>
-		/// <param name="swapCommand">The swap command ("start" or "end").</param>
-		/// <param name="sitemapSource">The source URL of the sitemap.</param>
-		/// <returns>A task representing the asynchronous operation.</returns>
-		private async Task SendSwapCommandMessage(string swapCommand, string sitemapSource)
-		{
-			if (string.IsNullOrWhiteSpace(swapCommand) || string.IsNullOrWhiteSpace(sitemapSource))
-			{
-				_logger.LogError("Invalid swap command or sitemap source provided.");
-				return;
-			}
-
-			var message = new { source = sitemapSource, indexSwap = swapCommand };
-			var messageBody = JsonSerializer.Serialize(message);
-			var serviceBusMessage = new ServiceBusMessage(messageBody);
-
-			try
-			{
-				await _sender.SendMessageAsync(serviceBusMessage);
-				_logger.LogInformation("Sent IndexSwap: {SwapCommand} message for sitemap: {SitemapSource}", swapCommand, sitemapSource);
-			}
-			catch (Exception ex)
-			{
-				_logger.LogError(ex, "Error sending IndexSwap: {SwapCommand} message for sitemap: {SitemapSource}. Error message: {message}", swapCommand, sitemapSource, ex.Message);
-			}
-		}
-
-		/// <summary>
-		/// Asynchronously releases the unmanaged resources used by the CrawlIndexRunner.
-		/// </summary>
-		public async ValueTask DisposeAsync()
-		{
-			if (_sender != null)
-			{
-				await _sender.DisposeAsync();
-			}
-			if (_serviceBusClient != null)
-			{
-				await _serviceBusClient.DisposeAsync();
-			}
-			GC.SuppressFinalize(this);
 		}
 	}
 }
