@@ -21,10 +21,10 @@ using System.Text.RegularExpressions;
 
 namespace AzureFunctions.Indexer
 {
-	/// <summary>
-	/// Base class for crawling web pages and indexing their content in Azure Search.
-	/// </summary>
-	public class PageCrawlerBase
+    /// <summary>
+    /// Base class for crawling web pages and indexing their content in Azure Search.
+    /// </summary>
+    public class PageCrawlerBase
 	{
 		internal readonly HttpClient _httpClient;
 		internal readonly ILogger<PageCrawlerBase> _logger;
@@ -98,8 +98,7 @@ namespace AzureFunctions.Indexer
 			_metaFieldMappings = configuration.GetSection("MetaFieldMappings").Get<List<MetaTagConfig>>();
 			_jsonLdMappings = configuration.GetSection("JsonLdMappings").Get<List<JsonLdConfig>>();
 
-			_logger.LogInformation("Page Crawler initialized with User-Agent: {UserAgent}, MaxConcurrency: {MaxConcurrency}, MaxRetries: {MaxRetries}",
-				userAgent, _maxConcurrency, _maxRetries);
+			_logger.LogInformation("Page Crawler initialized with User-Agent: {UserAgent}, MaxConcurrency: {MaxConcurrency}, MaxRetries: {MaxRetries}", userAgent, _maxConcurrency, _maxRetries);
         }
 
 		private async Task CreateAliasAsync(string indexName)
@@ -314,11 +313,6 @@ namespace AzureFunctions.Indexer
 
 			var results = new ConcurrentBag<SearchDocument>();
 
-            if (crawlRequest.IndexSwap == IndexConst.INDEX_START)
-			{
-				await StartIndexSwapAsync();
-			}
-
 			var indexName = string.IsNullOrEmpty(_newIndexName) ? _currentIndexName : _newIndexName;
 			_logger.LogInformation("Selected index name: {indexName}.", indexName);
 
@@ -328,7 +322,7 @@ namespace AzureFunctions.Indexer
 				new AzureKeyCredential(_searchApiKey));
 
 			// Loads Cvent data and index
-			await ProcessCventInformation(crawlRequest.Source);
+			//await ProcessCventInformation(crawlRequest.Source);
 
 			// Crawls pages, extract data and upload to index
 			if (crawlRequest.Urls != null && crawlRequest.Urls.Count > 0)
@@ -348,14 +342,9 @@ namespace AzureFunctions.Indexer
 			{
 				_logger.LogInformation("No pages to crawl in request");
 			}
-
-			if (crawlRequest.IndexSwap == IndexConst.INDEX_END)
-			{
-				await CompleteIndexSwapAsync();
-			}
 		}
 
-		private async Task StartIndexSwapAsync()
+		public async Task StartIndexSwapAsync()
 		{
 			_logger.LogInformation("Starting index swap process");
 
@@ -466,8 +455,7 @@ namespace AzureFunctions.Indexer
 			try
 			{
 				await _searchClient.MergeOrUploadDocumentsAsync(new[] { document }, cancellationToken: cancellationToken);
-				_logger.LogInformation("Indexed document for {Url} with ID: {UniqueId} from source: {Source}",
-					document["url"], document["id"], document["source"]);
+				_logger.LogInformation("Indexed document for {Url} with ID: {UniqueId} from source: {Source}", document["url"], document["id"], document["source"]);
 			}
 			catch (Exception ex)
 			{
@@ -802,7 +790,7 @@ namespace AzureFunctions.Indexer
 				// throw;
 			}
 		}
-		private async Task CompleteIndexSwapAsync()
+		public async Task CompleteIndexSwapAsync()
 		{
 			_logger.LogInformation("Completing index swap process");
 			if (string.IsNullOrEmpty(_newIndexName))
