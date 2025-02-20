@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Azure.Search.Documents;
 using Azure;
+using AzureFunctions.Indexer;
 
 var host = new HostBuilder()
 				.ConfigureFunctionsWorkerDefaults()
@@ -14,7 +15,7 @@ var host = new HostBuilder()
 				.ConfigureServices((context, services) =>
 				{
 					services.AddHttpClient();
-					//services.AddSingleton<PageCrawlerQueue>();
+					services.AddTransient<PageCrawlerQueue>();
 					//services.AddSingleton<IConfiguration>(context.Configuration);
 
 					// Add any other services your application needs here
