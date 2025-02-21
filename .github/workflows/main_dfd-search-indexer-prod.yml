@@ -34,6 +34,7 @@ jobs:
           pushd './${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}'
           dotnet build --configuration Release --output ./output
           popd
+
       
       - name: Login to Azure
         uses: azure/login@v2
@@ -42,6 +43,19 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_D8E15A7FA88E4DF2ABA29C98DB01E00D }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_A3594502CB744DC2B01FBC0EC5D4A27A }}
 
+      - name: Public IP
+        id: ip
+        uses: haythem/public-ip@v1.2
+  
+      - name: 'Allow Github Runner IpAddress'
+        uses: azure/CLI@v1
+        with:
+          azcliversion: 2.37.0
+          inlineScript: |
+            az webapp config access-restriction set -g rg-dfd-prod-000 -n dfd-search-indexer-prod --use-same-restrictions-for-scm-site false
+            az functionapp config access-restriction add -g rg-dfd-prod-000 -n dfd-search-indexer-prod --rule-name github_runner --action Allow --ip-address ${{ steps.ip.outputs.ipv4 }} --priority 100 --scm-site true
+
+ 
       - name: 'Run Azure Functions Action'
         uses: Azure/functions-action@v1
         id: fa
@@ -49,4 +63,13 @@ jobs:
           app-name: 'dfd-search-indexer-prod'
           slot-name: 'Production'
           package: '${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}/output'
+
+
+      - name: 'Remove Github Runner IpAddress'
+        uses: azure/CLI@v1
+        with:
+          azcliversion: 2.37.0
+          inlineScript: |
+            az functionapp config access-restriction remove -g rg-dfd-prod-000 -n dfd-search-indexer-prod --rule-name github_runner --scm-site true
+            az webapp config access-restriction set -g rg-dfd-prod-000 -n dfd-search-indexer-prod --use-same-restrictions-for-scm-site true
           
