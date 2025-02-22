@@ -43,8 +43,13 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_D8E15A7FA88E4DF2ABA29C98DB01E00D }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_A3594502CB744DC2B01FBC0EC5D4A27A }}
 
-      - name: Check IP        
+      - name: Get Runner IP    
+        id: ip    
         run: curl https://api.ipify.org
+ 
+      - name: Print Runner IP
+        run: |
+          echo ${{ steps.ip.outputs.ipv4 }}
   
       - name: 'Allow Github Runner IpAddress'
         uses: azure/CLI@v1
