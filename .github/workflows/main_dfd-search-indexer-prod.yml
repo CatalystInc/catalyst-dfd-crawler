@@ -49,6 +49,7 @@ jobs:
       - name: 'Allow Github Runner IpAddress'
         shell: pwsh
         run: |
+          $RUNNER_IP=(curl -Uri "https://api64.ipify.org").Content
           az functionapp config access-restriction add -g rg-dfd-prod-000 -n dfd-search-indexer-prod --rule-name "GitHubRunnerIP" --action Allow --ip-address $RUNNER_IP/32 --priority 100 --scm-site true
  
       - name: 'Run Azure Functions Action'
