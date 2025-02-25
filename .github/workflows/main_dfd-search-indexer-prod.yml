@@ -42,16 +42,6 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_D8E15A7FA88E4DF2ABA29C98DB01E00D }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_A3594502CB744DC2B01FBC0EC5D4A27A }}
 
-      - name: Get GitHub Runner IP
-        id: get_ip
-        run: echo "RUNNER_IP=$(curl -s https://api64.ipify.org)" >> $GITHUB_ENV
-  
-      - name: 'Allow Github Runner IpAddress'
-        shell: pwsh
-        run: |
-          $RUNNER_IP=(curl -Uri "https://api64.ipify.org").Content
-          az functionapp config access-restriction add -g rg-dfd-prod-000 -n dfd-search-indexer-prod --rule-name "GitHubRunnerIP" --action Allow --ip-address $RUNNER_IP/32 --priority 100 --scm-site true
- 
       - name: 'Run Azure Functions Action'
         uses: Azure/functions-action@v1
         id: fa
@@ -60,8 +50,4 @@ jobs:
           slot-name: 'Production'
           package: '${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}/output'
 
-      - name: 'Remove Github Runner IpAddress'
-        shell: pwsh
-        run: |
-          az functionapp config access-restriction remove -g rg-dfd-prod-000 -n dfd-search-indexer-prod --rule-name "GitHubRunnerIP"
-          
+   
