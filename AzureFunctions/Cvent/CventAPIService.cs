@@ -74,9 +74,13 @@ namespace AzureFunctions.Cvent
             httpRequest.Content.Headers.ContentType = new MediaTypeHeaderValue("application/x-www-form-urlencoded");
 
             var response = await _httpClient.SendAsync(httpRequest);
-
             var stringResponse = await response.Content.ReadAsStringAsync();
-            
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError($"[CVENT API Service] Access Token response: {response.StatusCode}, {stringResponse}");
+            }
+
             //_logger.LogInformation($"[CVENT API Service] Access Token response: {stringResponse}");
             var accessTokenModel = JsonConvert.DeserializeObject<AccessTokenResponseModel>(stringResponse);
             return accessTokenModel;
@@ -97,6 +101,11 @@ namespace AzureFunctions.Cvent
 
             var response = await _httpClient.SendAsync(httpRequest);
             var stringResponse = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError($"[CVENT API Service] GetEvents response: {response.StatusCode}, {stringResponse}");
+            }
 
             //_logger.LogInformation($"[CVENT API Service] Events response -> status code: {response.StatusCode}, content: {stringResponse}");
             var eventsResponse = JsonConvert.DeserializeObject<EventsResponseModel>(stringResponse);
