@@ -51,11 +51,7 @@ namespace AzureFunctions.Cvent
 
         public async Task<AccessTokenResponseModel> GetAccessToken()
         {
-            _logger.LogInformation($"[CVENT API Service] Starting GetAccessToken call.");
-
             var url = "/ea/oauth2/token";
-
-            _logger.LogInformation($"[CVENT API Service] cientId: {_cventClientId}, client secret: {_cventClientSecret}");
 
             var request = new FormUrlEncodedContent(new Dictionary<string, string>
             {
@@ -71,19 +67,13 @@ namespace AzureFunctions.Cvent
                 Content = request
             };
 
-            _logger.LogInformation($"[CVENT API Service] Getting base64 authorization.");
             var authorization = GetBase64Authorization();
-            _logger.LogInformation($"[CVENT API Service] base64 authorization: {authorization}");
 
             httpRequest.Headers.Add("authorization", $"Basic {authorization}"); 
             httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             httpRequest.Content.Headers.ContentType = new MediaTypeHeaderValue("application/x-www-form-urlencoded");
 
-            _logger.LogInformation($"[CVENT API Service] Sending http request to get access token. base url: {_httpClient.BaseAddress}, relative url: {httpRequest.RequestUri.ToString()}");
-
             var response = await _httpClient.SendAsync(httpRequest);
-
-            _logger.LogInformation($"[CVENT API Service] Got response from http request to get access token");
 
             var stringResponse = await response.Content.ReadAsStringAsync();
 
@@ -91,21 +81,14 @@ namespace AzureFunctions.Cvent
             {
                 _logger.LogError($"[CVENT API Service] Access Token response: {response.StatusCode}, reason: {response.ReasonPhrase}, content: {stringResponse}");
             }
-            else
-            {
-                _logger.LogInformation($"[CVENT API Service] Success status code: {response.StatusCode}, {response.ReasonPhrase}");
-                _logger.LogInformation($"[CVENT API Service] Access Token response: {stringResponse}");
-            }
-            _logger.LogInformation($"[CVENT API Service] Deserializaing response.");
+
             var accessTokenModel = JsonConvert.DeserializeObject<AccessTokenResponseModel>(stringResponse);
-            _logger.LogInformation($"[CVENT API Service] Finishing GetAccessToken call");
             return accessTokenModel;
         }
 
         public async Task<EventsResponseModel> GetEvents(string accessToken)
         {
-            _logger.LogInformation($"[CVENT API Service] Starting GetEvents call.");
-            var url = "/ea/events";
+            var url = "/ea/events?filter=status eq 'Active'";
 
             var httpRequest = new HttpRequestMessage
             {
@@ -113,29 +96,18 @@ namespace AzureFunctions.Cvent
                 RequestUri = new Uri(url, UriKind.Relative)
             };
 
-            _logger.LogInformation($"[CVENT API Service] access token: {accessToken}");
-
             httpRequest.Headers.Add("authorization", $"Bearer {accessToken}");
             httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-
-            _logger.LogInformation($"[CVENT API Service] Sending http request to get events data. base url: {_httpClient.BaseAddress}, relative url: {httpRequest.RequestUri.ToString()}");
 
             var response = await _httpClient.SendAsync(httpRequest);
             var stringResponse = await response.Content.ReadAsStringAsync();
 
             if (!response.IsSuccessStatusCode)
             {
-                _logger.LogError($"[CVENT API Service] GetEvents response: {response.StatusCode}, {stringResponse}");
-            }
-            else
-            {
-                _logger.LogInformation($"[CVENT API Service] Success status code: {response.StatusCode}, {response.ReasonPhrase}");
-                _logger.LogInformation($"[CVENT API Service] GetEvents response: {stringResponse}");
+                _logger.LogError($"[CVENT API Service] GetEvents response: {response.StatusCode}, reason: {response.ReasonPhrase}, content: {stringResponse}");
             }
 
-            _logger.LogInformation($"[CVENT API Service] Deserializaing response.");
             var eventsResponse = JsonConvert.DeserializeObject<EventsResponseModel>(stringResponse);
-            _logger.LogInformation($"[CVENT API Service] Finishing GetEvents call");
             return eventsResponse;
         }
 
