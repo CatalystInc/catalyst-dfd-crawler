@@ -281,7 +281,8 @@ namespace AzureFunctions.Indexer
 									    item.FacetValues != null && item.FacetValues.Count > 0)
 									{
 										var fieldName = $"facet_{item.FacetName}";
-										if (searchDocument[fieldName] != null)
+
+                                        if (searchDocument.ContainsKey(fieldName))
 										{
 											var currentFacetValues = searchDocument[fieldName] as List<string>;
 											if (currentFacetValues != null)
