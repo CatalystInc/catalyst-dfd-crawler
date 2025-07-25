@@ -281,7 +281,19 @@ namespace AzureFunctions.Indexer
 									    item.FacetValues != null && item.FacetValues.Count > 0)
 									{
 										var fieldName = $"facet_{item.FacetName}";
-										searchDocument[fieldName] = item.FacetValues;
+										if (searchDocument[fieldName] != null)
+										{
+											var currentFacetValues = searchDocument[fieldName] as List<string>;
+											if (currentFacetValues != null)
+											{
+												currentFacetValues.AddRange(item.FacetValues);
+												searchDocument[fieldName] = currentFacetValues;
+											}
+                                        }
+										else
+										{
+											searchDocument[fieldName] = item.FacetValues;
+										}
 									}
 								}
 							}
