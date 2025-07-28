@@ -281,7 +281,20 @@ namespace AzureFunctions.Indexer
 									    item.FacetValues != null && item.FacetValues.Count > 0)
 									{
 										var fieldName = $"facet_{item.FacetName}";
-										searchDocument[fieldName] = item.FacetValues;
+
+                                        if (searchDocument.ContainsKey(fieldName))
+										{
+											var currentFacetValues = searchDocument[fieldName] as List<string>;
+											if (currentFacetValues != null)
+											{
+												currentFacetValues.AddRange(item.FacetValues);
+												searchDocument[fieldName] = currentFacetValues;
+											}
+                                        }
+										else
+										{
+											searchDocument[fieldName] = item.FacetValues;
+										}
 									}
 								}
 							}
@@ -322,7 +335,7 @@ namespace AzureFunctions.Indexer
 				new AzureKeyCredential(_searchApiKey));
 
 			// Loads Cvent data and index
-			//await ProcessCventInformation(crawlRequest.Source);
+			await ProcessCventInformation(crawlRequest.Source);
 
 			// Crawls pages, extract data and upload to index
 			if (crawlRequest.Urls != null && crawlRequest.Urls.Count > 0)

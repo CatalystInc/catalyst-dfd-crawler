@@ -69,22 +69,26 @@ namespace AzureFunctions.Cvent
 
             var authorization = GetBase64Authorization();
 
-            httpRequest.Headers.Add("authorization", $"Basic {authorization}");
+            httpRequest.Headers.Add("authorization", $"Basic {authorization}"); 
             httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             httpRequest.Content.Headers.ContentType = new MediaTypeHeaderValue("application/x-www-form-urlencoded");
 
             var response = await _httpClient.SendAsync(httpRequest);
 
             var stringResponse = await response.Content.ReadAsStringAsync();
-            
-            //_logger.LogInformation($"[CVENT API Service] Access Token response: {stringResponse}");
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError($"[CVENT API Service] Access Token response: {response.StatusCode}, reason: {response.ReasonPhrase}, content: {stringResponse}");
+            }
+
             var accessTokenModel = JsonConvert.DeserializeObject<AccessTokenResponseModel>(stringResponse);
             return accessTokenModel;
         }
 
         public async Task<EventsResponseModel> GetEvents(string accessToken)
         {
-            var url = "/ea/events";
+            var url = "/ea/events?filter=status eq 'Active'";
 
             var httpRequest = new HttpRequestMessage
             {
@@ -98,7 +102,11 @@ namespace AzureFunctions.Cvent
             var response = await _httpClient.SendAsync(httpRequest);
             var stringResponse = await response.Content.ReadAsStringAsync();
 
-            //_logger.LogInformation($"[CVENT API Service] Events response -> status code: {response.StatusCode}, content: {stringResponse}");
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError($"[CVENT API Service] GetEvents response: {response.StatusCode}, reason: {response.ReasonPhrase}, content: {stringResponse}");
+            }
+
             var eventsResponse = JsonConvert.DeserializeObject<EventsResponseModel>(stringResponse);
             return eventsResponse;
         }
