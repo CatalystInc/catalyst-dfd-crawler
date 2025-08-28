@@ -9,7 +9,6 @@ using AzureFunctions.Models;
 using AzureSearchCrawler;
 using Google.Protobuf.WellKnownTypes;
 using HtmlAgilityPack;
-using Microsoft.Azure.Amqp.Framing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
