@@ -4,6 +4,7 @@ using Azure.Search.Documents.Indexes;
 using Azure.Search.Documents.Indexes.Models;
 using Azure.Search.Documents.Models;
 using AzureFunctions.Cvent;
+using AzureFunctions.Cvent.Models;
 using AzureFunctions.Models;
 using AzureSearchCrawler;
 using Google.Protobuf.WellKnownTypes;
@@ -536,6 +537,8 @@ namespace AzureFunctions.Indexer
 						{
 							var eventDetails = dataMapper.ToEventDetailsModel(eventEntry);
 
+							if (excludeEventFromSearch(eventDetails)) continue;
+
 							var searchDocument = new SearchDocument
 							{
 								["id"] = eventDetails.Id,
@@ -604,6 +607,16 @@ namespace AzureFunctions.Indexer
 				document["error"] = ex.Message;
 				return document;
             }
+        }
+
+		bool excludeEventFromSearch(EventDetailsModel model)
+		{
+			return model.Tags != null &&
+				model.Tags.Any(t =>
+					!string.IsNullOrEmpty(t) &&
+					(t.Equals("invitation-only", StringComparison.OrdinalIgnoreCase) ||
+					t.Equals("canceled", StringComparison.OrdinalIgnoreCase) ||
+					t.Equals("test", StringComparison.OrdinalIgnoreCase)));
         }
 
         bool TryConvertValue(JToken token, string targetType, out object result)
