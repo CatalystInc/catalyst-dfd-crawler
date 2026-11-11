@@ -43,24 +43,24 @@ namespace AzureFunctions.Indexer
                 .ToList();
 
         /// <summary>
-        /// The hreflang values listed for each URL, keyed like the URLs to crawl (without
-        /// #fragment); values of duplicate entries are merged.
+        /// The alternates listed for each URL, keyed like the URLs to crawl (without
+        /// #fragment); alternates of duplicate entries are merged (first one per hreflang wins).
         /// </summary>
-        public static Dictionary<string, List<string>> HreflangsByUrl(IEnumerable<SitemapEntry> entries)
+        public static Dictionary<string, List<SitemapAlternate>> AlternatesByUrl(IEnumerable<SitemapEntry> entries)
         {
-            var byUrl = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            var byUrl = new Dictionary<string, List<SitemapAlternate>>(StringComparer.Ordinal);
             foreach (var entry in entries)
             {
                 var url = NormalizeUrl(entry.Url);
-                if (!byUrl.TryGetValue(url, out var hreflangs))
+                if (!byUrl.TryGetValue(url, out var alternates))
                 {
-                    byUrl[url] = hreflangs = new List<string>();
+                    byUrl[url] = alternates = new List<SitemapAlternate>();
                 }
-                foreach (var hreflang in entry.Hreflangs)
+                foreach (var alternate in entry.Alternates)
                 {
-                    if (!hreflangs.Contains(hreflang, StringComparer.OrdinalIgnoreCase))
+                    if (!alternates.Any(existing => string.Equals(existing.Hreflang, alternate.Hreflang, StringComparison.OrdinalIgnoreCase)))
                     {
-                        hreflangs.Add(hreflang);
+                        alternates.Add(alternate);
                     }
                 }
             }

@@ -6,26 +6,30 @@ namespace AzureFunctions.Tests;
 
 public class SitemapParserTests
 {
+    private const string En = "https://www.catalyst.org/pages/terms-of-use";
+    private const string Fr = "https://www.catalyst.org/fr-ca/pages/terms-of-use";
+    private const string EnOnly = "https://www.catalyst.org/insights/2026/five-bs-gender-partnership";
+
     // The shape the site's sitemap will have: one <url> per language version, each listing
     // every version (itself included) plus x-default.
-    private const string LocalizedSitemap = """
+    private const string LocalizedSitemap = $"""
         <?xml version="1.0" encoding="utf-8"?>
         <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
           <url>
-            <loc>https://www.catalyst.org/pages/terms-of-use</loc>
+            <loc>{En}</loc>
             <lastmod>2026-11-10T23:44:21.220Z</lastmod>
-            <xhtml:link rel="alternate" hreflang="en-us" href="https://www.catalyst.org/pages/terms-of-use" />
-            <xhtml:link rel="alternate" hreflang="fr-ca" href="https://www.catalyst.org/fr-ca/pages/terms-of-use" />
-            <xhtml:link rel="alternate" hreflang="x-default" href="https://www.catalyst.org/pages/terms-of-use" />
+            <xhtml:link rel="alternate" hreflang="en-us" href="{En}" />
+            <xhtml:link rel="alternate" hreflang="fr-ca" href="{Fr}" />
+            <xhtml:link rel="alternate" hreflang="x-default" href="{En}" />
           </url>
           <url>
-            <loc>https://www.catalyst.org/fr-ca/pages/terms-of-use</loc>
-            <xhtml:link rel="alternate" hreflang="en-us" href="https://www.catalyst.org/pages/terms-of-use" />
-            <xhtml:link rel="alternate" hreflang="fr-ca" href="https://www.catalyst.org/fr-ca/pages/terms-of-use" />
-            <xhtml:link rel="alternate" hreflang="x-default" href="https://www.catalyst.org/pages/terms-of-use" />
+            <loc>{Fr}</loc>
+            <xhtml:link rel="alternate" hreflang="en-us" href="{En}" />
+            <xhtml:link rel="alternate" hreflang="fr-ca" href="{Fr}" />
+            <xhtml:link rel="alternate" hreflang="x-default" href="{En}" />
           </url>
           <url>
-            <loc>https://www.catalyst.org/insights/2026/five-bs-gender-partnership</loc>
+            <loc>{EnOnly}</loc>
             <lastmod>2026-11-10T23:44:21.220Z</lastmod>
           </url>
           <url>
@@ -36,76 +40,118 @@ public class SitemapParserTests
 
     private static readonly IReadOnlySet<string> Supported = PageLocale.ParseLocales(PageLocale.DefaultSupportedLocales);
 
+    private static List<SitemapEntry> Parse(string xml) => SitemapParser.ParseUrlset(XDocument.Parse(xml));
+
     [Fact]
-    public void Reads_locs_and_their_hreflangs()
+    public void Reads_locs_and_their_alternates()
     {
-        var entries = SitemapParser.ParseUrlset(XDocument.Parse(LocalizedSitemap));
+        var entries = Parse(LocalizedSitemap);
 
         Assert.Equal(3, entries.Count);
-        Assert.Equal("https://www.catalyst.org/pages/terms-of-use", entries[0].Url);
-        Assert.Equal(new[] { "en-us", "fr-ca", "x-default" }, entries[0].Hreflangs);
-        Assert.Equal("https://www.catalyst.org/fr-ca/pages/terms-of-use", entries[1].Url);
-        Assert.Empty(entries[2].Hreflangs);
+        Assert.Equal(En, entries[0].Url);
+        Assert.Equal(
+            new[] { new SitemapAlternate("en-us", En), new SitemapAlternate("fr-ca", Fr), new SitemapAlternate("x-default", En) },
+            entries[0].Alternates);
+        Assert.Equal(Fr, entries[1].Url);
+        Assert.Empty(entries[2].Alternates);
     }
 
     [Fact]
     public void Reads_todays_sitemap_without_alternates()
     {
-        var doc = XDocument.Parse("""
+        var entries = Parse("""
             <?xml version="1.0" encoding="utf-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://www.catalyst.org/a</loc><lastmod>2026-11-10</lastmod></url><url><loc> https://www.catalyst.org/b </loc></url></urlset>
             """);
 
-        var entries = SitemapParser.ParseUrlset(doc);
-
         Assert.Equal(new[] { "https://www.catalyst.org/a", "https://www.catalyst.org/b" }, entries.Select(e => e.Url));
-        Assert.All(entries, entry => Assert.Empty(entry.Hreflangs));
+        Assert.All(entries, entry => Assert.Empty(entry.Alternates));
     }
 
     [Fact]
-    public void Ignores_links_that_are_not_alternates()
+    public void Reads_alternates_under_any_namespace_prefix()
     {
-        var doc = XDocument.Parse("""
+        var entries = Parse($"""
+            <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:x="http://www.w3.org/1999/xhtml">
+              <url><loc>{En}</loc><x:link rel="alternate" hreflang="fr-ca" href="{Fr}" /></url>
+            </urlset>
+            """);
+
+        Assert.Equal(new[] { new SitemapAlternate("fr-ca", Fr) }, entries[0].Alternates);
+    }
+
+    [Fact]
+    public void Ignores_links_that_are_not_usable_alternates()
+    {
+        var entries = Parse($"""
             <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
               <url>
-                <loc>https://www.catalyst.org/a</loc>
-                <xhtml:link rel="canonical" hreflang="fr-ca" href="https://www.catalyst.org/fr-ca/a" />
-                <xhtml:link rel="ALTERNATE" hreflang=" fr-CA " href="https://www.catalyst.org/fr-ca/a" />
+                <loc>{En}</loc>
+                <xhtml:link rel="canonical" hreflang="fr-ca" href="{Fr}" />
+                <xhtml:link rel="ALTERNATE" hreflang=" fr-CA " href=" {Fr} " />
                 <xhtml:link rel="alternate" href="https://www.catalyst.org/x" />
+                <xhtml:link rel="alternate" hreflang="en-us" />
+                <link rel="alternate" hreflang="en-us" href="{En}" />
               </url>
             </urlset>
             """);
 
-        Assert.Equal(new[] { "fr-CA" }, SitemapParser.ParseUrlset(doc)[0].Hreflangs);
+        Assert.Equal(new[] { new SitemapAlternate("fr-CA", Fr) }, entries[0].Alternates);
     }
 
     [Fact]
-    public void English_page_with_a_French_version_lists_fr_ca()
+    public void English_page_with_a_French_version_lists_fr_ca_and_the_reverse()
     {
-        var entries = SitemapParser.ParseUrlset(XDocument.Parse(LocalizedSitemap));
+        var entries = Parse(LocalizedSitemap);
+        List<string> AlternatesOf(SitemapEntry entry) =>
+            PageLocale.Alternates(PageLocale.FromUrl(entry.Url, Supported, "en-us"), entry.Alternates.Select(a => a.Hreflang), Supported);
 
-        var english = entries[0];
-        var french = entries[1];
-        var englishOnly = entries[2];
-
-        Assert.Equal(new[] { "fr-ca" }, PageLocale.Alternates(PageLocale.FromUrl(english.Url, Supported, "en-us"), english.Hreflangs, Supported));
-        Assert.Equal(new[] { "en-us" }, PageLocale.Alternates(PageLocale.FromUrl(french.Url, Supported, "en-us"), french.Hreflangs, Supported));
-        Assert.Empty(PageLocale.Alternates(PageLocale.FromUrl(englishOnly.Url, Supported, "en-us"), englishOnly.Hreflangs, Supported));
+        Assert.Equal(new[] { "fr-ca" }, AlternatesOf(entries[0]));
+        Assert.Equal(new[] { "en-us" }, AlternatesOf(entries[1]));
+        Assert.Empty(AlternatesOf(entries[2]));
     }
 
     [Fact]
-    public void Hreflangs_are_keyed_like_the_crawled_urls_and_merged()
+    public void Alternates_are_keyed_like_the_crawled_urls_and_merged()
     {
-        var byUrl = SitemapUrlFilter.HreflangsByUrl(new[]
+        var byUrl = SitemapUrlFilter.AlternatesByUrl(new[]
         {
-            new SitemapEntry("https://www.catalyst.org/pages/x#top", new[] { "en-us", "fr-ca" }),
-            new SitemapEntry("https://www.catalyst.org/pages/x", new[] { "FR-CA", "x-default" }),
-            new SitemapEntry("https://www.catalyst.org/pages/y", Array.Empty<string>()),
+            new SitemapEntry("https://www.catalyst.org/pages/x#top", new[] { new SitemapAlternate("en-us", "a"), new SitemapAlternate("fr-ca", "b") }),
+            new SitemapEntry("https://www.catalyst.org/pages/x", new[] { new SitemapAlternate("FR-CA", "c"), new SitemapAlternate("x-default", "a") }),
+            new SitemapEntry("https://www.catalyst.org/pages/y", Array.Empty<SitemapAlternate>()),
         });
 
-        Assert.Equal(new[] { "en-us", "fr-ca", "x-default" }, byUrl["https://www.catalyst.org/pages/x"]);
+        Assert.Equal(
+            new[] { new SitemapAlternate("en-us", "a"), new SitemapAlternate("fr-ca", "b"), new SitemapAlternate("x-default", "a") },
+            byUrl["https://www.catalyst.org/pages/x"]);
         Assert.Empty(byUrl["https://www.catalyst.org/pages/y"]);
         Assert.False(byUrl.ContainsKey("https://www.catalyst.org/pages/x#top"));
     }
+
+    [Fact]
+    public void Verified_alternates_need_the_other_version_to_be_indexed()
+    {
+        var alternates = new[] { new SitemapAlternate("en-us", En), new SitemapAlternate("fr-ca", Fr + "#main"), new SitemapAlternate("x-default", En) };
+
+        // The French version was indexed (fragment ignored): the English page has a French version.
+        Assert.Equal(new[] { "fr-ca" }, PageLocale.VerifiedAlternates("en-us", alternates, new HashSet<string> { En, Fr }, Supported));
+
+        // The French version is dead, failed or missing from the sitemap: French search keeps showing the English page.
+        Assert.Empty(PageLocale.VerifiedAlternates("en-us", alternates, new HashSet<string> { En }, Supported));
+        Assert.Empty(PageLocale.VerifiedAlternates("en-us", null, new HashSet<string> { En, Fr }, Supported));
+    }
+
+    [Theory]
+    [InlineData(Fr, "https://www.catalyst.org/pages/terms-of-use", true)]
+    [InlineData(En, "https://www.catalyst.org/fr-ca/pages/terms-of-use", true)]
+    [InlineData(Fr, "https://www.catalyst.org/fr-ca/pages/terms-of-use?t=1", false)]
+    [InlineData(En, "https://www.catalyst.org/en-us/pages/terms-of-use", false)]
+    [InlineData("https://www.catalyst.org/bio/x", "https://www.catalyst.org/about/our-team/x", false)]
+    public void Recognises_redirects_into_another_language(string url, string finalUrl, bool expected) =>
+        Assert.Equal(expected, PageLocale.IsCrossLocaleRedirect(url, new Uri(finalUrl), Supported, "en-us"));
+
+    [Fact]
+    public void Without_a_final_url_there_is_no_cross_language_redirect() =>
+        Assert.False(PageLocale.IsCrossLocaleRedirect(Fr, null, Supported, "en-us"));
 
     [Fact]
     public void Adds_the_alternate_locales_field_once_as_a_filterable_string_collection()
