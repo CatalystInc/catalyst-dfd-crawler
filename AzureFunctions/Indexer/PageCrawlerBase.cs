@@ -370,6 +370,23 @@ namespace AzureFunctions.Indexer
 		{
 			_logger.LogInformation("Starting index swap process");
 
+			// Check before deleting anything: the index to rebuild must not be the live one,
+			// and the live index must exist, since its schema is copied below.
+			if (string.Equals(_newIndexName, _currentIndexName, StringComparison.OrdinalIgnoreCase))
+			{
+				throw new IndexSwapAbortedException(
+					$"The index to rebuild, {_newIndexName}, is the live index; nothing was deleted. Point {_searchIndexAlias} at {_searchIndexBaseName}_0 or {_searchIndexBaseName}_1.");
+			}
+			try
+			{
+				await _searchIndexClient.GetIndexAsync(_currentIndexName);
+			}
+			catch (RequestFailedException ex) when (ex.Status == 404)
+			{
+				throw new IndexSwapAbortedException(
+					$"The live index {_currentIndexName} does not exist, so there is no schema to copy; {_newIndexName} was not deleted. Point {_searchIndexAlias} at an existing index.", ex);
+			}
+
 			try
 			{
 				// Attempt to get the index. If it doesn't exist, this will throw an exception
@@ -838,12 +855,16 @@ namespace AzureFunctions.Indexer
 			const int attempts = 6;
 			var delay = TimeSpan.FromSeconds(5);
 
-			var liveCount = await TryGetDocumentCountAsync(_currentIndexName);
+			long? liveCount = null;
 			long newCount = 0;
 			string? rejection = null;
 
 			try
 			{
+				// Null only when the live index is gone; any other failure aborts, since
+				// skipping the comparison could put a near-empty index live.
+				liveCount = await GetDocumentCountOrNullAsync(_currentIndexName);
+
 				// The count can trail the last uploads by a few seconds, so re-read it
 				// before giving up.
 				for (var attempt = 1; attempt <= attempts; attempt++)
@@ -860,7 +881,7 @@ namespace AzureFunctions.Indexer
 			catch (Exception ex)
 			{
 				throw new IndexSwapAbortedException(
-					$"Could not count the documents in {_newIndexName}; {_searchIndexAlias} still points to {_currentIndexName}.", ex);
+					$"Could not count the documents in {_currentIndexName} or {_newIndexName}; {_searchIndexAlias} still points to {_currentIndexName}.", ex);
 			}
 
 			if (rejection != null)
@@ -876,9 +897,10 @@ namespace AzureFunctions.Indexer
 		}
 
 		/// <summary>
-		/// The index's document count, or null when it doesn't exist or can't be read.
+		/// The index's document count, or null when the index doesn't exist. Other errors
+		/// are thrown (the SDK has already retried transient ones).
 		/// </summary>
-		private async Task<long?> TryGetDocumentCountAsync(string indexName)
+		private async Task<long?> GetDocumentCountOrNullAsync(string indexName)
 		{
 			try
 			{
@@ -886,11 +908,7 @@ namespace AzureFunctions.Indexer
 			}
 			catch (RequestFailedException ex) when (ex.Status == 404)
 			{
-				return null;
-			}
-			catch (Exception ex)
-			{
-				_logger.LogWarning(ex, "Could not count the documents in the live index {Index}; only the minimum document check applies.", indexName);
+				_logger.LogWarning("The live index {Index} no longer exists; only the minimum document check applies.", indexName);
 				return null;
 			}
 		}
