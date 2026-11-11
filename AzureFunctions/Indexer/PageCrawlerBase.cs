@@ -43,6 +43,8 @@ namespace AzureFunctions.Indexer
 		private readonly string _searchIndexAlias;
 		private readonly string _searchApiKey;
 		private readonly bool _deleteOldIndexOnSwap;
+		private readonly double _swapMinDocumentRatio;
+		private readonly long _swapMinDocuments;
 		private string _currentIndexName;
 		private string _newIndexName;
 		private string _eventFacetValue;
@@ -85,6 +87,8 @@ namespace AzureFunctions.Indexer
 			_searchIndexAlias = configuration["SearchIndexAlias"] ?? throw new ArgumentNullException(nameof(configuration), "SearchIndexAlias is missing");
 			_searchIndexBaseName = configuration["SearchIndexBaseName"] ?? throw new ArgumentNullException(nameof(configuration), "SearchIndexBaseName is missing");
 			_deleteOldIndexOnSwap = bool.Parse(Environment.GetEnvironmentVariable("DeleteOldIndexOnSwap") ?? "false");
+			_swapMinDocumentRatio = IndexSwapGuard.ParseRatio(configuration["SwapMinDocumentRatio"]);
+			_swapMinDocuments = IndexSwapGuard.ParseMinDocuments(configuration["SwapMinDocuments"]);
 
             _contentTypeFacetName = configuration["ContentTypeFacetName"] ?? throw new ArgumentNullException(nameof(configuration), "ContentTypeFacetName is missing");
             _eventFacetValue = configuration["EventFacetValue"] ?? throw new ArgumentNullException(nameof(configuration), "EventFacetValue is missing");
@@ -381,8 +385,13 @@ namespace AzureFunctions.Indexer
 				_logger.LogInformation($"Index {_newIndexName} does not exist. Proceeding with creation.");
 			}
 
-			// Clone the existing index schema
-			await CloneIndexSchemaAsync(_currentIndexName, _newIndexName);
+			// Clone the existing index schema. Without it every upload fails and the run
+			// would end with an empty index, so stop here and leave the live index alone.
+			if (!await CloneIndexSchemaAsync(_currentIndexName, _newIndexName))
+			{
+				throw new IndexSwapAbortedException(
+					$"Could not create {_newIndexName} from the schema of {_currentIndexName}; the crawl was not run and {_searchIndexAlias} still points to the live index.");
+			}
 
 			_logger.LogInformation($"New index {_newIndexName} created");
 		}
@@ -820,6 +829,72 @@ namespace AzureFunctions.Indexer
 				// throw;
 			}
 		}
+		/// <summary>
+		/// Throws <see cref="IndexSwapAbortedException"/> unless the new index has enough
+		/// documents to replace the live one (see <see cref="IndexSwapGuard"/>).
+		/// </summary>
+		private async Task EnsureNewIndexCanGoLiveAsync()
+		{
+			const int attempts = 6;
+			var delay = TimeSpan.FromSeconds(5);
+
+			var liveCount = await TryGetDocumentCountAsync(_currentIndexName);
+			long newCount = 0;
+			string? rejection = null;
+
+			try
+			{
+				// The count can trail the last uploads by a few seconds, so re-read it
+				// before giving up.
+				for (var attempt = 1; attempt <= attempts; attempt++)
+				{
+					newCount = (await _searchIndexClient.GetSearchClient(_newIndexName).GetDocumentCountAsync()).Value;
+					rejection = IndexSwapGuard.GetRejectionReason(newCount, liveCount, _swapMinDocumentRatio, _swapMinDocuments);
+					if (rejection == null || attempt == attempts)
+					{
+						break;
+					}
+					await Task.Delay(delay);
+				}
+			}
+			catch (Exception ex)
+			{
+				throw new IndexSwapAbortedException(
+					$"Could not count the documents in {_newIndexName}; {_searchIndexAlias} still points to {_currentIndexName}.", ex);
+			}
+
+			if (rejection != null)
+			{
+				throw new IndexSwapAbortedException(
+					$"Not switching {_searchIndexAlias} to {_newIndexName}: {rejection}. It still points to {_currentIndexName}. " +
+					"For an intended shrink, lower SwapMinDocumentRatio (0 turns the comparison off) for one run.");
+			}
+
+			_logger.LogInformation(
+				"New index {NewIndex} has {NewCount} documents (live index {LiveIndex}: {LiveCount}); switching the alias.",
+				_newIndexName, newCount, _currentIndexName, liveCount?.ToString() ?? "unknown");
+		}
+
+		/// <summary>
+		/// The index's document count, or null when it doesn't exist or can't be read.
+		/// </summary>
+		private async Task<long?> TryGetDocumentCountAsync(string indexName)
+		{
+			try
+			{
+				return (await _searchIndexClient.GetSearchClient(indexName).GetDocumentCountAsync()).Value;
+			}
+			catch (RequestFailedException ex) when (ex.Status == 404)
+			{
+				return null;
+			}
+			catch (Exception ex)
+			{
+				_logger.LogWarning(ex, "Could not count the documents in the live index {Index}; only the minimum document check applies.", indexName);
+				return null;
+			}
+		}
+
 		public async Task CompleteIndexSwapAsync()
 		{
 			_logger.LogInformation("Completing index swap process");
@@ -830,6 +905,8 @@ namespace AzureFunctions.Indexer
 			}
 
 			string oldIndexName = _currentIndexName;
+
+			await EnsureNewIndexCanGoLiveAsync();
 
 			try
 			{

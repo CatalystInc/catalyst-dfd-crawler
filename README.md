@@ -76,6 +76,7 @@ The web crawler system is designed to efficiently index web content into Azure C
    - Existing core continues serving searches
 3. Completion:
    - "End" swap command triggers index switch
+   - Swap guard: the alias is only switched when the new index has at least `SwapMinDocuments` documents and at least `SwapMinDocumentRatio` of the live index's count. Otherwise the run fails, the alias stays on the live index, and nothing is deleted. A failed schema clone also stops the run before crawling.
    - Search alias updated to new core
    - Old index optionally deleted
 
@@ -96,6 +97,7 @@ The system is highly configurable through environment variables and settings:
 - Field mappings for meta tags and JSON-LD
 - Facet configurations
 - Index naming and lifecycle management
+- `SwapMinDocumentRatio` (optional, default `0.8`) and `SwapMinDocuments` (optional, default `1`): the swap guard's thresholds. For an intended large shrink, set `SwapMinDocumentRatio` to `0` for one run, then restore it.
 - `SitemapSkippedPathPrefixes` (optional, default `fr,es,de,jp,cn,br`): sitemap URLs whose first path segment is one of these legacy locale prefixes are not crawled. An empty value crawls everything. `fr-ca` and `en-us` URLs are never matched.
 
 The crawler sends no cookies: the site sets a `locale` cookie on `/fr-ca/` pages and renders unprefixed URLs in that cookie's language, so a shared cookie would index French titles under English URLs (DFDMVP-2279).
@@ -191,6 +193,8 @@ These values need to be set in the Azure Function configuration (environment var
     "CrawlerMaxConcurrency": 3,
     "CrawlerMaxRetries": 3,
     "SitemapSkippedPathPrefixes": "fr,es,de,jp,cn,br",
+    "SwapMinDocumentRatio": "0.8",
+    "SwapMinDocuments": "1",
     "ContentTypeFacetName": "facet_Content_Type_bltedec8785cf776886",
     "EventTypeFacetName": "facet_Event_Type_blta4cbd29d70185dba",
     "EventFacetValue": "facet_Event_blt3464588e70baf655",
