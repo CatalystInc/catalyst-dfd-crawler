@@ -34,4 +34,17 @@ public class PageLocaleTests
     [Fact]
     public void Parses_the_supported_locales_setting() =>
         Assert.True(PageLocale.ParseLocales("en-US, fr_CA,,").SetEquals(new[] { "en-us", "fr-ca" }));
+
+    [Fact]
+    public void Alternates_leave_out_the_page_itself_x_default_and_unsupported_codes() =>
+        Assert.Equal(
+            new[] { "fr-ca" },
+            PageLocale.Alternates("en-us", new[] { "x-default", "EN-US", "fr_CA", "fr-ca", "es-mx", "" }, Supported));
+
+    [Fact]
+    public void Alternates_are_empty_without_hreflangs()
+    {
+        Assert.Empty(PageLocale.Alternates("en-us", null, Supported));
+        Assert.Empty(PageLocale.Alternates("en-us", Array.Empty<string>(), Supported));
+    }
 }

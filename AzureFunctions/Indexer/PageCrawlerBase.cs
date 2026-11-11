@@ -215,7 +215,7 @@ namespace AzureFunctions.Indexer
 		/// <param name="source">The source of the URL.</param>
 		/// <returns>A task that represents the asynchronous operation. The task result contains the search document.</returns>
 		/// <exception cref="ArgumentNullException">Thrown when url or source is null.</exception>
-		public async Task<SearchDocument> CrawlPageAsync(string url, string source)
+		public async Task<SearchDocument> CrawlPageAsync(string url, string source, IReadOnlyList<string>? hreflangs = null)
 		{
 			ArgumentNullException.ThrowIfNull(url);
 			ArgumentNullException.ThrowIfNull(source);
@@ -332,7 +332,11 @@ namespace AzureFunctions.Indexer
 
 				// Set last, so no meta tag or JSON-LD mapping (e.g. og:locale, always en_US
 				// on the site) overrides it: the language follows the URL the page came from.
-				searchDocument["locale"] = PageLocale.FromUrl(finalUri?.ToString() ?? url, _supportedLocales, _defaultLocale);
+				var locale = PageLocale.FromUrl(finalUri?.ToString() ?? url, _supportedLocales, _defaultLocale);
+				searchDocument["locale"] = locale;
+				// The other languages the sitemap lists for this page (empty when it has none),
+				// so French search can leave out English pages that have a French version.
+				searchDocument[PageLocale.AlternateLocalesField] = PageLocale.Alternates(locale, hreflangs, _supportedLocales);
 
 				return searchDocument;
 			}
@@ -377,7 +381,9 @@ namespace AzureFunctions.Indexer
 					new ParallelOptions { MaxDegreeOfParallelism = _maxConcurrency },
 					async (url, ct) =>
 					{
-						var searchDocument = await ProcessUrlWithRetryAsync(url, crawlRequest.Source, ct);
+						List<string>? hreflangs = null;
+						crawlRequest.Hreflangs?.TryGetValue(url, out hreflangs);
+						var searchDocument = await ProcessUrlWithRetryAsync(url, crawlRequest.Source, hreflangs, ct);
 						await Task.Delay(100, ct); // Slow down to prevent rate limiting
 						results.Add(searchDocument);
 					});
@@ -532,13 +538,13 @@ namespace AzureFunctions.Indexer
 			}
 		}
 
-		async Task<SearchDocument> ProcessUrlWithRetryAsync(string url, string source, CancellationToken cancellationToken)
+		async Task<SearchDocument> ProcessUrlWithRetryAsync(string url, string source, IReadOnlyList<string>? hreflangs, CancellationToken cancellationToken)
 		{
 			for (int attempt = 1; attempt <= _maxRetries; attempt++)
 			{
 				try
 				{
-					var searchDocument = await CrawlPageAsync(url, source);
+					var searchDocument = await CrawlPageAsync(url, source, hreflangs);
 					await IndexSearchDocumentAsync(searchDocument, cancellationToken);
 					return searchDocument;
 				}
@@ -1013,6 +1019,28 @@ namespace AzureFunctions.Indexer
 			}
 		}
 
+		/// <summary>
+		/// Adds the filterable alternate_locales field when the schema being copied doesn't have
+		/// it yet (indexes built before French search). Each run copies the live index, so after
+		/// one run every index has it.
+		/// </summary>
+		public static void EnsureAlternateLocalesField(IList<SearchField> fields)
+		{
+			if (fields.Any(field => string.Equals(field.Name, PageLocale.AlternateLocalesField, StringComparison.Ordinal)))
+			{
+				return;
+			}
+
+			fields.Add(new SearchField(PageLocale.AlternateLocalesField, SearchFieldDataType.Collection(SearchFieldDataType.String))
+			{
+				IsFilterable = true,
+				IsSearchable = false,
+				IsFacetable = false,
+				IsSortable = false,
+				IsHidden = false,
+			});
+		}
+
 		public async Task<bool> CloneIndexSchemaAsync(string sourceIndexName, string targetIndexName)
 		{
 			Console.WriteLine($"Cloning schema from '{sourceIndexName}' to '{targetIndexName}'");
@@ -1030,6 +1058,7 @@ namespace AzureFunctions.Indexer
 					CorsOptions = sourceIndex.Value.CorsOptions,
 					VectorSearch = sourceIndex.Value.VectorSearch
 				};
+				EnsureAlternateLocalesField(newIndex.Fields);
 
 				// Add analyzers
 				if (sourceIndex.Value.Analyzers != null)

@@ -14,6 +14,13 @@ namespace AzureFunctions.Indexer
         public const string DefaultLocale = "en-us";
 
         /// <summary>
+        /// Index field listing the other languages a page exists in (from the sitemap's
+        /// hreflang alternates). French search uses it to show an English page only when
+        /// it has no French version: <c>not alternate_locales/any(l: l eq 'fr-ca')</c>.
+        /// </summary>
+        public const string AlternateLocalesField = "alternate_locales";
+
+        /// <summary>
         /// Parses a comma-separated list of locales into lowercase codes, e.g. "en-US, fr-CA" -> en-us, fr-ca.
         /// </summary>
         public static HashSet<string> ParseLocales(string? value) =>
@@ -48,6 +55,21 @@ namespace AzureFunctions.Indexer
             }
 
             return Normalize(defaultLocale);
+        }
+
+        /// <summary>
+        /// The other supported languages the page exists in, from the hreflang values the
+        /// sitemap lists for it (which include the page itself and x-default), sorted.
+        /// </summary>
+        public static List<string> Alternates(string ownLocale, IEnumerable<string>? hreflangs, IReadOnlySet<string> supportedLocales)
+        {
+            var own = Normalize(ownLocale);
+            return (hreflangs ?? Enumerable.Empty<string>())
+                .Select(Normalize)
+                .Where(locale => locale != own && supportedLocales.Contains(locale))
+                .Distinct()
+                .OrderBy(locale => locale, StringComparer.Ordinal)
+                .ToList();
         }
     }
 }
