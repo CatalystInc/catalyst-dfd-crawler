@@ -28,6 +28,11 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      # The test project is not in WebCrawler.sln, so the build below (and the deployed package) doesn't include it.
+      - name: 'Run unit tests'
+        shell: pwsh
+        run: dotnet test ./Tests/AzureFunctions.Tests/AzureFunctions.Tests.csproj --configuration Release
+
       - name: 'Resolve Project Dependencies Using Dotnet'
         shell: pwsh
         run: |
