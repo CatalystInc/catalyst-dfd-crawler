@@ -67,7 +67,11 @@ namespace AzureFunctions.Indexer
             _loggerFactory = loggerFactory;
 
             _logger = loggerFactory.CreateLogger<PageCrawlerBase>();
-			_httpClient = new HttpClient();
+			// No cookies (DFDMVP-2279): one client crawls the whole sitemap, and the site
+			// sets 'locale=fr-ca' on any /fr-ca/ page (including redirect targets). With
+			// the default handler that cookie is sent on every later request, and the
+			// site then renders unprefixed URLs in French.
+			_httpClient = new HttpClient(new SocketsHttpHandler { UseCookies = false });
 
 			var userAgent = configuration["UserAgent"] ?? "DefaultCrawlerBot/1.0";
 			_httpClient.DefaultRequestHeaders.Add("User-Agent", userAgent);

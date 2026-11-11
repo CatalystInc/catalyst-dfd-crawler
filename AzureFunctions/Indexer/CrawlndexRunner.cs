@@ -15,6 +15,7 @@ namespace AzureFunctions.Indexer
 		private readonly HttpClient _httpClient;
 		private readonly string _sitemapsRootUrl;
 		private readonly PageCrawlerQueue _queue;
+		private readonly HashSet<string> _skippedPathPrefixes;
 
         /// <summary>
         /// Initializes a new instance of the CrawlIndexRunner class.
@@ -30,6 +31,8 @@ namespace AzureFunctions.Indexer
 			_sitemapsRootUrl = configuration["SitemapsRootUrl"] ?? throw new ArgumentNullException(nameof(configuration), "SitemapsRootUrl configuration is missing");
 			_httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
 			_queue = queue;
+			_skippedPathPrefixes = SitemapUrlFilter.ParsePrefixes(
+				configuration["SitemapSkippedPathPrefixes"] ?? SitemapUrlFilter.DefaultSkippedPathPrefixes);
 
         }
 
@@ -128,12 +131,20 @@ namespace AzureFunctions.Indexer
 				return new List<string>();
 			}
 
-			return doc.Root.Elements(ns + "url")
+			var urls = doc.Root.Elements(ns + "url")
 				.Select(urlElement => urlElement.Element(ns + "loc"))
 				.Where(locElement => locElement != null)
 				.Select(locElement => locElement.Value.Trim())
 				.Where(url => !string.IsNullOrWhiteSpace(url))
 				.ToList();
+
+			var skipped = urls.RemoveAll(url => SitemapUrlFilter.HasSkippedPrefix(url, _skippedPathPrefixes));
+			if (skipped > 0)
+			{
+				_logger.LogInformation("Skipped {SkippedCount} sitemap URLs under the path prefixes {Prefixes}", skipped, string.Join(",", _skippedPathPrefixes));
+			}
+
+			return urls;
 		}
 
 		/// <summary>
