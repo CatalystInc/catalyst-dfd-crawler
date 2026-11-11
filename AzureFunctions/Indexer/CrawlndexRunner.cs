@@ -89,6 +89,12 @@ namespace AzureFunctions.Indexer
 			{
 				_logger.LogError(e, "Invalid sitemap format: {Url}. Error: {message}", url, e.Message);
 			}
+			catch (IndexSwapAbortedException e)
+			{
+				// The live index was kept. Rethrow so the invocation shows as failed and can alert.
+				_logger.LogError(e, "Index swap aborted for sitemap {Url}: {message}", url, e.Message);
+				throw;
+			}
 			catch (Exception e)
 			{
 				_logger.LogError(e, "An unexpected error occurred while processing sitemap: {Url}. Error: {message}", url, e.Message);
