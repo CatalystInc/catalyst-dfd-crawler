@@ -43,6 +43,31 @@ namespace AzureFunctions.Indexer
                 .ToList();
 
         /// <summary>
+        /// The hreflang values listed for each URL, keyed like the URLs to crawl (without
+        /// #fragment); values of duplicate entries are merged.
+        /// </summary>
+        public static Dictionary<string, List<string>> HreflangsByUrl(IEnumerable<SitemapEntry> entries)
+        {
+            var byUrl = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            foreach (var entry in entries)
+            {
+                var url = NormalizeUrl(entry.Url);
+                if (!byUrl.TryGetValue(url, out var hreflangs))
+                {
+                    byUrl[url] = hreflangs = new List<string>();
+                }
+                foreach (var hreflang in entry.Hreflangs)
+                {
+                    if (!hreflangs.Contains(hreflang, StringComparer.OrdinalIgnoreCase))
+                    {
+                        hreflangs.Add(hreflang);
+                    }
+                }
+            }
+            return byUrl;
+        }
+
+        /// <summary>
         /// Whether the URL's first path segment is exactly one of the prefixes, e.g. 'fr'
         /// matches /fr/insights/... but not /fr-ca/... or /french-page.
         /// </summary>

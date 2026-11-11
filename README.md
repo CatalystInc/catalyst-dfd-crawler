@@ -108,6 +108,8 @@ The crawler sends no cookies: the site sets a `locale` cookie on `/fr-ca/` pages
 
 Every document gets a `locale` field in the search filter's format (`en-us`, `fr-ca`), taken from the page's URL after redirects: `/fr-ca/...` is `fr-ca` (any locale in `SupportedLocales` works the same way), and everything else, including Cvent events, is `DefaultLocale`. It is written last, so it replaces the value from the `og:locale` meta mapping (the site always renders `en_US` there); that `MetaFieldMappings` entry can be removed.
 
+Documents also get `alternate_locales`: the other supported languages the page exists in, from the sitemap's `<xhtml:link rel="alternate" hreflang="...">` elements (empty when the sitemap lists none). The site's French search uses it to show English pages only when they have no French version (`locale eq 'fr-ca' or not alternate_locales/any(l: l eq 'fr-ca')`). The field is a filterable string collection; when the live index doesn't have it yet, the schema clone adds it, so it exists after one run.
+
 ### Sitemap URLs
 
 Before crawling, `#fragments` are dropped (the sitemap's `https://www.catalyst.org/#` entries are the homepage) and duplicates removed. A URL that ends on a 404/410 or on the site's `/not-found` page is skipped once, without retries, and logged as `Skipping sitemap URL`.

@@ -75,8 +75,9 @@ namespace AzureFunctions.Indexer
 						break;
 					case "urlset":
 						_logger.LogInformation("Processing urlset: {Url}", url);
-						List<string> urls = ExtractUrlsFromSitemap(doc, ns);
-						await ProcessSitemapUrlsAsync(url, urls);
+						var entries = SitemapParser.ParseUrlset(doc);
+						List<string> urls = ExtractUrlsFromSitemap(entries);
+						await ProcessSitemapUrlsAsync(url, urls, SitemapUrlFilter.HreflangsByUrl(entries));
 						break;
 					default:
 						throw new FormatException("The XML does not appear to be a valid sitemap or sitemap index.");
@@ -139,25 +140,14 @@ namespace AzureFunctions.Indexer
 		}
 
 		/// <summary>
-		/// Extracts URLs from a sitemap document.
+		/// The URLs to crawl from a sitemap's entries: without #fragments, duplicates or
+		/// skipped legacy prefixes.
 		/// </summary>
-		/// <param name="doc">The XDocument representing the sitemap.</param>
-		/// <param name="ns">The XML namespace of the document.</param>
+		/// <param name="entries">The sitemap's &lt;url&gt; entries.</param>
 		/// <returns>A list of URLs extracted from the sitemap.</returns>
-		private List<string> ExtractUrlsFromSitemap(XDocument doc, XNamespace ns)
+		private List<string> ExtractUrlsFromSitemap(IReadOnlyList<SitemapEntry> entries)
 		{
-			if (doc.Root == null)
-			{
-				_logger.LogError("Invalid sitemap: Root element is missing.");
-				return new List<string>();
-			}
-
-			var locs = doc.Root.Elements(ns + "url")
-				.Select(urlElement => urlElement.Element(ns + "loc"))
-				.Where(locElement => locElement != null)
-				.Select(locElement => locElement!.Value.Trim())
-				.Where(url => !string.IsNullOrWhiteSpace(url))
-				.ToList();
+			var locs = entries.Select(entry => entry.Url).ToList();
 
 			var urls = SitemapUrlFilter.NormalizeAndDedupe(locs);
 			if (urls.Count < locs.Count)
@@ -179,8 +169,9 @@ namespace AzureFunctions.Indexer
 		/// </summary>
 		/// <param name="sitemapSource">The source URL of the sitemap.</param>
 		/// <param name="urls">The list of URLs to process.</param>
+		/// <param name="hreflangs">The hreflang values the sitemap lists per URL.</param>
 		/// <returns>A task representing the asynchronous operation.</returns>
-		private async Task ProcessSitemapUrlsAsync(string sitemapSource, List<string> urls)
+		private async Task ProcessSitemapUrlsAsync(string sitemapSource, List<string> urls, Dictionary<string, List<string>> hreflangs)
 		{
 			if (string.IsNullOrWhiteSpace(sitemapSource))
 			{
@@ -196,7 +187,7 @@ namespace AzureFunctions.Indexer
 
 			_logger.LogInformation("Processing {UrlCount} URLs from sitemap: {SitemapSource}", urls.Count, sitemapSource);
 
-			var crawlRequest = new CrawlRequest() { Source = sitemapSource, Urls = urls };
+			var crawlRequest = new CrawlRequest() { Source = sitemapSource, Urls = urls, Hreflangs = hreflangs };
 
 			await _queue.CrawlPagesAsync(crawlRequest);
 		}
