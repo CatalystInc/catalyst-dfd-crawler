@@ -108,7 +108,7 @@ The crawler sends no cookies: the site sets a `locale` cookie on `/fr-ca/` pages
 
 Every document gets a `locale` field in the search filter's format (`en-us`, `fr-ca`), taken from the page's URL after redirects: `/fr-ca/...` is `fr-ca` (any locale in `SupportedLocales` works the same way), and everything else, including Cvent events, is `DefaultLocale`. It is written last, so it replaces the value from the `og:locale` meta mapping (the site always renders `en_US` there); that `MetaFieldMappings` entry can be removed.
 
-Documents also get `alternate_locales`: the other supported languages the page exists in, from the sitemap's `<xhtml:link rel="alternate" hreflang="...">` elements (empty when the sitemap lists none). The site's French search uses it to show English pages only when they have no French version (`locale eq 'fr-ca' or not alternate_locales/any(l: l eq 'fr-ca')`). The field is a filterable string collection; when the live index doesn't have it yet, the schema clone adds it, so it exists after one run.
+Documents also get `alternate_locales`: the other supported languages the page exists in, from the sitemap's `<xhtml:link rel="alternate" hreflang="...">` elements (empty when the sitemap lists none). The site's French search uses it to show English pages only when they have no French version (`locale eq 'fr-ca' or not alternate_locales/any(l: l eq 'fr-ca')`). The field is a filterable string collection; when the live index doesn't have it yet, the schema clone adds it, so it exists after one run. After the crawl, and before the swap, a language stays in a page's `alternate_locales` only if that language's URL was indexed in the same run, so a dead or failed French version never hides the English page from French search. A sitemap URL that redirects into another language (e.g. a `/fr-ca/` URL that lands on an English page) is skipped like a dead link. The run logs how many entries list alternates and any `hreflang` codes that aren't supported locales.
 
 ### Sitemap URLs
 
@@ -147,6 +147,21 @@ Set source to source sitemap url and urls to the list of urls to index when inde
     "https://www.catalyst.org/2020/08/10/racism-gender-pay-gap-women/",
     "https://www.catalyst.org/2021/04/27/future-of-work-summit-europe-2021-takeaways/"
   ]
+}
+```
+
+Optionally add `alternates`, the language versions per URL (as the sitemap's hreflang links give them), to fill `alternate_locales`. Without it, a crawled document keeps the `alternate_locales` value it already has.
+
+```json
+{
+  "source": "https://www.catalyst.org/sitemap.xml",
+  "urls": ["https://www.catalyst.org/pages/terms-of-use"],
+  "alternates": {
+    "https://www.catalyst.org/pages/terms-of-use": [
+      { "hreflang": "en-us", "href": "https://www.catalyst.org/pages/terms-of-use" },
+      { "hreflang": "fr-ca", "href": "https://www.catalyst.org/fr-ca/pages/terms-of-use" }
+    ]
+  }
 }
 ```
 

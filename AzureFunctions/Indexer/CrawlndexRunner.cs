@@ -16,6 +16,7 @@ namespace AzureFunctions.Indexer
 		private readonly string _sitemapsRootUrl;
 		private readonly PageCrawlerQueue _queue;
 		private readonly HashSet<string> _skippedPathPrefixes;
+		private readonly HashSet<string> _supportedLocales;
 
         /// <summary>
         /// Initializes a new instance of the CrawlIndexRunner class.
@@ -33,6 +34,7 @@ namespace AzureFunctions.Indexer
 			_queue = queue;
 			_skippedPathPrefixes = SitemapUrlFilter.ParsePrefixes(
 				configuration["SitemapSkippedPathPrefixes"] ?? SitemapUrlFilter.DefaultSkippedPathPrefixes);
+			_supportedLocales = PageLocale.ParseLocales(configuration["SupportedLocales"] ?? PageLocale.DefaultSupportedLocales);
 
         }
 
@@ -77,7 +79,8 @@ namespace AzureFunctions.Indexer
 						_logger.LogInformation("Processing urlset: {Url}", url);
 						var entries = SitemapParser.ParseUrlset(doc);
 						List<string> urls = ExtractUrlsFromSitemap(entries);
-						await ProcessSitemapUrlsAsync(url, urls, SitemapUrlFilter.HreflangsByUrl(entries));
+						LogAlternatesSummary(entries);
+						await ProcessSitemapUrlsAsync(url, urls, SitemapUrlFilter.AlternatesByUrl(entries));
 						break;
 					default:
 						throw new FormatException("The XML does not appear to be a valid sitemap or sitemap index.");
@@ -140,6 +143,28 @@ namespace AzureFunctions.Indexer
 		}
 
 		/// <summary>
+		/// Logs how many entries list language alternates, and hreflang codes that are ignored
+		/// because they aren't supported locales (e.g. language-only 'fr'), so a sitemap whose
+		/// alternates can't be used doesn't go unnoticed.
+		/// </summary>
+		private void LogAlternatesSummary(IReadOnlyList<SitemapEntry> entries)
+		{
+			var withAlternates = entries.Count(entry => entry.Alternates.Count > 0);
+			_logger.LogInformation("Sitemap lists language alternates for {WithAlternates} of {Total} entries", withAlternates, entries.Count);
+
+			var ignored = entries
+				.SelectMany(entry => entry.Alternates)
+				.Select(alternate => PageLocale.Normalize(alternate.Hreflang))
+				.Where(hreflang => hreflang != "x-default" && !_supportedLocales.Contains(hreflang))
+				.Distinct()
+				.ToList();
+			if (ignored.Count > 0)
+			{
+				_logger.LogWarning("Ignoring hreflang values that aren't supported locales: {Hreflangs}", string.Join(",", ignored));
+			}
+		}
+
+		/// <summary>
 		/// The URLs to crawl from a sitemap's entries: without #fragments, duplicates or
 		/// skipped legacy prefixes.
 		/// </summary>
@@ -169,9 +194,9 @@ namespace AzureFunctions.Indexer
 		/// </summary>
 		/// <param name="sitemapSource">The source URL of the sitemap.</param>
 		/// <param name="urls">The list of URLs to process.</param>
-		/// <param name="hreflangs">The hreflang values the sitemap lists per URL.</param>
+		/// <param name="alternates">The language alternates the sitemap lists per URL.</param>
 		/// <returns>A task representing the asynchronous operation.</returns>
-		private async Task ProcessSitemapUrlsAsync(string sitemapSource, List<string> urls, Dictionary<string, List<string>> hreflangs)
+		private async Task ProcessSitemapUrlsAsync(string sitemapSource, List<string> urls, Dictionary<string, List<SitemapAlternate>> alternates)
 		{
 			if (string.IsNullOrWhiteSpace(sitemapSource))
 			{
@@ -187,7 +212,7 @@ namespace AzureFunctions.Indexer
 
 			_logger.LogInformation("Processing {UrlCount} URLs from sitemap: {SitemapSource}", urls.Count, sitemapSource);
 
-			var crawlRequest = new CrawlRequest() { Source = sitemapSource, Urls = urls, Hreflangs = hreflangs };
+			var crawlRequest = new CrawlRequest() { Source = sitemapSource, Urls = urls, Alternates = alternates };
 
 			await _queue.CrawlPagesAsync(crawlRequest);
 		}

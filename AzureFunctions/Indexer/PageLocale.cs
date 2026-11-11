@@ -71,5 +71,31 @@ namespace AzureFunctions.Indexer
                 .OrderBy(locale => locale, StringComparer.Ordinal)
                 .ToList();
         }
+
+        /// <summary>
+        /// Like <see cref="Alternates(string, IEnumerable{string}?, IReadOnlySet{string})"/>, but only
+        /// counting alternates whose URL was indexed in this crawl. A French version that is dead,
+        /// failed or not in the sitemap must not hide the English page from French search.
+        /// </summary>
+        public static List<string> VerifiedAlternates(
+            string ownLocale,
+            IEnumerable<SitemapAlternate>? alternates,
+            IReadOnlySet<string> indexedUrls,
+            IReadOnlySet<string> supportedLocales) =>
+            Alternates(
+                ownLocale,
+                (alternates ?? Enumerable.Empty<SitemapAlternate>())
+                    .Where(alternate => indexedUrls.Contains(SitemapUrlFilter.NormalizeUrl(alternate.Href)))
+                    .Select(alternate => alternate.Hreflang),
+                supportedLocales);
+
+        /// <summary>
+        /// Whether a sitemap URL ended, after redirects, on a page in another language
+        /// (e.g. a /fr-ca/ URL redirecting to an English page): that URL has no page in
+        /// its own language.
+        /// </summary>
+        public static bool IsCrossLocaleRedirect(string url, Uri? finalUri, IReadOnlySet<string> supportedLocales, string defaultLocale) =>
+            finalUri != null
+            && FromUrl(url, supportedLocales, defaultLocale) != FromUrl(finalUri.ToString(), supportedLocales, defaultLocale);
     }
 }

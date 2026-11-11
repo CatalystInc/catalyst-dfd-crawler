@@ -215,7 +215,7 @@ namespace AzureFunctions.Indexer
 		/// <param name="source">The source of the URL.</param>
 		/// <returns>A task that represents the asynchronous operation. The task result contains the search document.</returns>
 		/// <exception cref="ArgumentNullException">Thrown when url or source is null.</exception>
-		public async Task<SearchDocument> CrawlPageAsync(string url, string source, IReadOnlyList<string>? hreflangs = null)
+		public async Task<SearchDocument> CrawlPageAsync(string url, string source, IReadOnlyList<SitemapAlternate>? alternates = null)
 		{
 			ArgumentNullException.ThrowIfNull(url);
 			ArgumentNullException.ThrowIfNull(source);
@@ -243,6 +243,12 @@ namespace AzureFunctions.Indexer
 				if (CrawlResponse.IsDeadLink(response.StatusCode, finalUri))
 				{
 					throw new DeadLinkException(url, finalUri, response.StatusCode);
+				}
+				// A /fr-ca/ URL that redirects to an English page (or the reverse) has no page
+				// in its own language; the target is indexed through its own sitemap entry.
+				if (PageLocale.IsCrossLocaleRedirect(url, finalUri, _supportedLocales, _defaultLocale))
+				{
+					throw new DeadLinkException(url, finalUri!);
 				}
 				response.EnsureSuccessStatusCode();
 
@@ -336,7 +342,13 @@ namespace AzureFunctions.Indexer
 				searchDocument["locale"] = locale;
 				// The other languages the sitemap lists for this page (empty when it has none),
 				// so French search can leave out English pages that have a French version.
-				searchDocument[PageLocale.AlternateLocalesField] = PageLocale.Alternates(locale, hreflangs, _supportedLocales);
+				// Checked again after the crawl (ReconcileAlternateLocalesAsync). Without
+				// sitemap data (an HTTP-triggered crawl) the field is left as it is.
+				if (alternates != null)
+				{
+					searchDocument[PageLocale.AlternateLocalesField] =
+						PageLocale.Alternates(locale, alternates.Select(alternate => alternate.Hreflang), _supportedLocales);
+				}
 
 				return searchDocument;
 			}
@@ -381,14 +393,16 @@ namespace AzureFunctions.Indexer
 					new ParallelOptions { MaxDegreeOfParallelism = _maxConcurrency },
 					async (url, ct) =>
 					{
-						List<string>? hreflangs = null;
-						crawlRequest.Hreflangs?.TryGetValue(url, out hreflangs);
-						var searchDocument = await ProcessUrlWithRetryAsync(url, crawlRequest.Source, hreflangs, ct);
+						List<SitemapAlternate>? alternates = null;
+						crawlRequest.Alternates?.TryGetValue(url, out alternates);
+						var searchDocument = await ProcessUrlWithRetryAsync(url, crawlRequest.Source, alternates, ct);
 						await Task.Delay(100, ct); // Slow down to prevent rate limiting
 						results.Add(searchDocument);
 					});
 
 				_logger.LogInformation("Crawled {Count} pages from source {Source}", results.Count, crawlRequest.Source);
+
+				await ReconcileAlternateLocalesAsync(crawlRequest, results.ToList());
 			}
 			else
 			{
@@ -538,13 +552,71 @@ namespace AzureFunctions.Indexer
 			}
 		}
 
-		async Task<SearchDocument> ProcessUrlWithRetryAsync(string url, string source, IReadOnlyList<string>? hreflangs, CancellationToken cancellationToken)
+		/// <summary>
+		/// After the crawl: keeps a language in a page's alternate_locales only when that
+		/// language's URL was indexed. A French version that was dead, failed, redirected
+		/// elsewhere or wasn't in the sitemap would otherwise hide the English page from
+		/// French search. Runs before the swap, so search never sees the unchecked values.
+		/// </summary>
+		private async Task ReconcileAlternateLocalesAsync(CrawlRequest crawlRequest, IReadOnlyList<SearchDocument> results)
+		{
+			if (crawlRequest.Alternates == null || crawlRequest.Alternates.Count == 0)
+			{
+				return;
+			}
+
+			var indexed = results
+				.Where(document => !document.ContainsKey("error"))
+				.Select(document => document.TryGetValue("url", out var url) ? url?.ToString() : null)
+				.Where(url => url != null)
+				.Select(url => url!)
+				.ToHashSet(StringComparer.Ordinal);
+
+			var corrected = 0;
+			foreach (var document in results.Where(document => !document.ContainsKey("error")))
+			{
+				var url = document["url"]?.ToString();
+				if (url == null
+					|| !crawlRequest.Alternates.TryGetValue(url, out var alternates)
+					|| alternates.Count == 0
+					|| !document.TryGetValue(PageLocale.AlternateLocalesField, out var written))
+				{
+					continue;
+				}
+
+				var verified = PageLocale.VerifiedAlternates(document["locale"]?.ToString() ?? _defaultLocale, alternates, indexed, _supportedLocales);
+				if (written is IEnumerable<string> current && current.SequenceEqual(verified))
+				{
+					continue;
+				}
+
+				try
+				{
+					await _searchClient.MergeDocumentsAsync(new[]
+					{
+						new SearchDocument { ["id"] = document["id"], [PageLocale.AlternateLocalesField] = verified },
+					});
+					corrected++;
+				}
+				catch (Exception ex)
+				{
+					_logger.LogWarning(ex, "Could not correct {Field} for {Url}", PageLocale.AlternateLocalesField, url);
+				}
+			}
+
+			if (corrected > 0)
+			{
+				_logger.LogInformation("Removed alternates that weren't indexed from {Count} documents", corrected);
+			}
+		}
+
+		async Task<SearchDocument> ProcessUrlWithRetryAsync(string url, string source, IReadOnlyList<SitemapAlternate>? alternates, CancellationToken cancellationToken)
 		{
 			for (int attempt = 1; attempt <= _maxRetries; attempt++)
 			{
 				try
 				{
-					var searchDocument = await CrawlPageAsync(url, source, hreflangs);
+					var searchDocument = await CrawlPageAsync(url, source, alternates);
 					await IndexSearchDocumentAsync(searchDocument, cancellationToken);
 					return searchDocument;
 				}

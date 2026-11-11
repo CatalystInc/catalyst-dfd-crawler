@@ -32,12 +32,18 @@ namespace AzureFunctions.Indexer
     }
 
     /// <summary>
-    /// The sitemap URL leads to a missing page; it is skipped without retries.
+    /// The sitemap URL leads to a missing page, or to a page in another language; it is
+    /// skipped without retries.
     /// </summary>
     public class DeadLinkException : Exception
     {
         public DeadLinkException(string url, Uri? finalUri, HttpStatusCode statusCode)
             : base($"{url} leads to a missing page ({(int)statusCode}{(finalUri != null ? $" at {finalUri.GetLeftPart(UriPartial.Path)}" : string.Empty)})")
+        {
+        }
+
+        public DeadLinkException(string url, Uri finalUri)
+            : base($"{url} redirects to a page in another language ({finalUri.GetLeftPart(UriPartial.Path)})")
         {
         }
     }
