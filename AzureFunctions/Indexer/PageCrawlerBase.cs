@@ -45,6 +45,8 @@ namespace AzureFunctions.Indexer
 		private readonly bool _deleteOldIndexOnSwap;
 		private readonly double _swapMinDocumentRatio;
 		private readonly long _swapMinDocuments;
+		private readonly HashSet<string> _supportedLocales;
+		private readonly string _defaultLocale;
 		private string _currentIndexName;
 		private string _newIndexName;
 		private string _eventFacetValue;
@@ -69,11 +71,7 @@ namespace AzureFunctions.Indexer
             _loggerFactory = loggerFactory;
 
             _logger = loggerFactory.CreateLogger<PageCrawlerBase>();
-			// No cookies (DFDMVP-2279): one client crawls the whole sitemap, and the site
-			// sets 'locale=fr-ca' on any /fr-ca/ page (including redirect targets). With
-			// the default handler that cookie is sent on every later request, and the
-			// site then renders unprefixed URLs in French.
-			_httpClient = new HttpClient(new SocketsHttpHandler { UseCookies = false });
+			_httpClient = new HttpClient(CreatePageHandler());
 
 			var userAgent = configuration["UserAgent"] ?? "DefaultCrawlerBot/1.0";
 			_httpClient.DefaultRequestHeaders.Add("User-Agent", userAgent);
@@ -89,6 +87,8 @@ namespace AzureFunctions.Indexer
 			_deleteOldIndexOnSwap = bool.Parse(Environment.GetEnvironmentVariable("DeleteOldIndexOnSwap") ?? "false");
 			_swapMinDocumentRatio = IndexSwapGuard.ParseRatio(configuration["SwapMinDocumentRatio"]);
 			_swapMinDocuments = IndexSwapGuard.ParseMinDocuments(configuration["SwapMinDocuments"]);
+			_supportedLocales = PageLocale.ParseLocales(configuration["SupportedLocales"] ?? PageLocale.DefaultSupportedLocales);
+			_defaultLocale = PageLocale.Normalize(configuration["DefaultLocale"] ?? PageLocale.DefaultLocale);
 
             _contentTypeFacetName = configuration["ContentTypeFacetName"] ?? throw new ArgumentNullException(nameof(configuration), "ContentTypeFacetName is missing");
             _eventFacetValue = configuration["EventFacetValue"] ?? throw new ArgumentNullException(nameof(configuration), "EventFacetValue is missing");
@@ -109,6 +109,15 @@ namespace AzureFunctions.Indexer
 
 			_logger.LogInformation("Page Crawler initialized with User-Agent: {UserAgent}, MaxConcurrency: {MaxConcurrency}, MaxRetries: {MaxRetries}", userAgent, _maxConcurrency, _maxRetries);
         }
+
+		/// <summary>
+		/// The handler for page requests. It follows redirects but keeps no cookies
+		/// (DFDMVP-2279): one client crawls the whole sitemap, and the site sets
+		/// 'locale=fr-ca' on any /fr-ca/ page, including redirect targets. With cookies, that
+		/// value is sent on every later request and the site renders unprefixed URLs in French.
+		/// </summary>
+		public static HttpMessageHandler CreatePageHandler() =>
+			new SocketsHttpHandler { UseCookies = false, AllowAutoRedirect = true };
 
 		private async Task CreateAliasAsync(string indexName)
 		{
@@ -228,6 +237,13 @@ namespace AzureFunctions.Indexer
                 }
 
                 using var response = await _httpClient.GetAsync(fetchUrl);
+
+				// After redirects: a missing page is skipped without retries.
+				var finalUri = response.RequestMessage?.RequestUri;
+				if (CrawlResponse.IsDeadLink(response.StatusCode, finalUri))
+				{
+					throw new DeadLinkException(url, finalUri, response.StatusCode);
+				}
 				response.EnsureSuccessStatusCode();
 
 				var html = await response.Content.ReadAsStringAsync();
@@ -314,7 +330,15 @@ namespace AzureFunctions.Indexer
 					_logger.LogWarning(ex, "Error processing JSON-LD for {Url}. Error message: {message}", url, ex.Message);
 				}
 
+				// Set last, so no meta tag or JSON-LD mapping (e.g. og:locale, always en_US
+				// on the site) overrides it: the language follows the URL the page came from.
+				searchDocument["locale"] = PageLocale.FromUrl(finalUri?.ToString() ?? url, _supportedLocales, _defaultLocale);
+
 				return searchDocument;
+			}
+			catch (DeadLinkException)
+			{
+				throw;
 			}
 			catch (Exception ex)
 			{
@@ -518,6 +542,18 @@ namespace AzureFunctions.Indexer
 					await IndexSearchDocumentAsync(searchDocument, cancellationToken);
 					return searchDocument;
 				}
+				catch (DeadLinkException ex)
+				{
+					// The sitemap lists a page that doesn't exist; retrying won't change that.
+					_logger.LogWarning("Skipping sitemap URL: {message}", ex.Message);
+					return new SearchDocument
+					{
+						["id"] = GenerateUrlUniqueId(url),
+						["url"] = url,
+						["error"] = ex.Message,
+						["source"] = source
+					};
+				}
 				catch (Exception ex) when (ex is not OperationCanceledException)
 				{
 					_logger.LogError(ex, "Error processing {Url} (Attempt {Attempt}/{MaxRetries}). Error message: {error}", url, attempt, _maxRetries, ex.Message);
@@ -580,7 +616,9 @@ namespace AzureFunctions.Indexer
 								["textContent"] = eventDetails.TextDescription,
 								[_contentTypeFacetName] = new List<string> { _eventFacetValue },
 								[_tagFacetName] = eventDetails.Tags,
-								[_dateFacetName] = eventDetails.StartDate
+								[_dateFacetName] = eventDetails.StartDate,
+								// Events are listed in English, like unprefixed pages.
+								["locale"] = _defaultLocale
                             };
 
 							if (!string.IsNullOrEmpty(eventDetails.EventTypeFacet))

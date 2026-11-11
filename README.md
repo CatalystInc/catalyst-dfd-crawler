@@ -100,7 +100,25 @@ The system is highly configurable through environment variables and settings:
 - `SwapMinDocumentRatio` (optional, default `0.8`) and `SwapMinDocuments` (optional, default `1`): the swap guard's thresholds. For an intended large shrink, set `SwapMinDocumentRatio` to `0` for one run, then restore it.
 - `SitemapSkippedPathPrefixes` (optional, default `fr,es,de,jp,cn,br`): sitemap URLs whose first path segment is one of these legacy locale prefixes are not crawled. An empty value crawls everything. `fr-ca` and `en-us` URLs are never matched.
 
+- `SupportedLocales` (optional, default `en-us,fr-ca`) and `DefaultLocale` (optional, default `en-us`): see Locale below.
+
 The crawler sends no cookies: the site sets a `locale` cookie on `/fr-ca/` pages and renders unprefixed URLs in that cookie's language, so a shared cookie would index French titles under English URLs (DFDMVP-2279).
+
+### Locale
+
+Every document gets a `locale` field in the search filter's format (`en-us`, `fr-ca`), taken from the page's URL after redirects: `/fr-ca/...` is `fr-ca` (any locale in `SupportedLocales` works the same way), and everything else, including Cvent events, is `DefaultLocale`. It is written last, so it replaces the value from the `og:locale` meta mapping (the site always renders `en_US` there); that `MetaFieldMappings` entry can be removed.
+
+### Sitemap URLs
+
+Before crawling, `#fragments` are dropped (the sitemap's `https://www.catalyst.org/#` entries are the homepage) and duplicates removed. A URL that ends on a 404/410 or on the site's `/not-found` page is skipped once, without retries, and logged as `Skipping sitemap URL`.
+
+### Tests
+
+```
+dotnet test Tests/AzureFunctions.Tests/AzureFunctions.Tests.csproj
+```
+
+The test project is deliberately not in `WebCrawler.sln`: the deploy workflows build the solution into `./output` and deploy that folder. The workflows run these tests before building and deploying.
 
 ## Functions
 

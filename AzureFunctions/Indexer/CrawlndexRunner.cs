@@ -152,12 +152,18 @@ namespace AzureFunctions.Indexer
 				return new List<string>();
 			}
 
-			var urls = doc.Root.Elements(ns + "url")
+			var locs = doc.Root.Elements(ns + "url")
 				.Select(urlElement => urlElement.Element(ns + "loc"))
 				.Where(locElement => locElement != null)
-				.Select(locElement => locElement.Value.Trim())
+				.Select(locElement => locElement!.Value.Trim())
 				.Where(url => !string.IsNullOrWhiteSpace(url))
 				.ToList();
+
+			var urls = SitemapUrlFilter.NormalizeAndDedupe(locs);
+			if (urls.Count < locs.Count)
+			{
+				_logger.LogInformation("Removed {DuplicateCount} duplicate sitemap URLs (after dropping #fragments)", locs.Count - urls.Count);
+			}
 
 			var skipped = urls.RemoveAll(url => SitemapUrlFilter.HasSkippedPrefix(url, _skippedPathPrefixes));
 			if (skipped > 0)
