@@ -76,7 +76,7 @@ The web crawler system is designed to efficiently index web content into Azure C
    - Existing core continues serving searches
 3. Completion:
    - "End" swap command triggers index switch
-   - Swap guard: the alias is only switched when the new index has at least `SwapMinDocuments` documents and at least `SwapMinDocumentRatio` of the live index's count. Otherwise the run fails, the alias stays on the live index, and nothing is deleted. A failed schema clone also stops the run before crawling.
+   - Swap guard: the alias is only switched when the new index has at least `SwapMinDocuments` documents and at least `SwapMinDocumentRatio` of the live index's count. Otherwise the run fails, the alias stays on the live index, and nothing is deleted. The run also stops before crawling, without deleting anything, when the live index is missing or is the index to rebuild, and when the schema clone fails. With a sitemap index as the root, all child sitemaps are crawled (one at a time) into one new index, and the swap happens once.
    - Search alias updated to new core
    - Old index optionally deleted
 

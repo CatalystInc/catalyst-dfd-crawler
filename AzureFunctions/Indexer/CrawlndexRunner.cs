@@ -40,8 +40,12 @@ namespace AzureFunctions.Indexer
 		/// Processes a sitemap or sitemap index at the given URL.
 		/// </summary>
 		/// <param name="url">The URL of the sitemap to process.</param>
+		/// <param name="isRoot">
+		/// True for the configured root sitemap. Only the root builds a new index and swaps it in,
+		/// once, after every child sitemap of a sitemap index has been crawled into it.
+		/// </param>
 		/// <returns>A task representing the asynchronous operation.</returns>
-		public async Task ProcessSitemapAsync(string url)
+		public async Task ProcessSitemapAsync(string url, bool isRoot = true)
 		{
 			if (string.IsNullOrWhiteSpace(url))
 			{
@@ -55,7 +59,10 @@ namespace AzureFunctions.Indexer
 				var xmlContent = await _httpClient.GetStringAsync(url);
 				var doc = XDocument.Parse(xmlContent);
 
-                await _queue.StartIndexSwapAsync();
+                if (isRoot)
+                {
+                    await _queue.StartIndexSwapAsync();
+                }
 
                 XNamespace ns = doc.Root?.GetDefaultNamespace() ?? XNamespace.None;
 
@@ -75,7 +82,10 @@ namespace AzureFunctions.Indexer
 						throw new FormatException("The XML does not appear to be a valid sitemap or sitemap index.");
 				}
 
-                await _queue.CompleteIndexSwapAsync();
+                if (isRoot)
+                {
+                    await _queue.CompleteIndexSwapAsync();
+                }
             }
 			catch (HttpRequestException e)
 			{
@@ -115,12 +125,17 @@ namespace AzureFunctions.Indexer
 				return;
 			}
 
-			var sitemapTasks = doc.Root.Elements(ns + "sitemap")
+			var childSitemapUrls = doc.Root.Elements(ns + "sitemap")
 				.Select(sitemapElement => sitemapElement.Element(ns + "loc"))
 				.Where(locElement => locElement != null)
-				.Select(locElement => ProcessSitemapAsync(locElement.Value.Trim()));
+				.Select(locElement => locElement!.Value.Trim());
 
-			await Task.WhenAll(sitemapTasks);
+			// One at a time, into the index the root is building: the root swaps once at the
+			// end, and the site sees the usual crawl concurrency rather than a multiple of it.
+			foreach (var childSitemapUrl in childSitemapUrls)
+			{
+				await ProcessSitemapAsync(childSitemapUrl, isRoot: false);
+			}
 		}
 
 		/// <summary>
