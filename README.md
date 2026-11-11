@@ -96,6 +96,9 @@ The system is highly configurable through environment variables and settings:
 - Field mappings for meta tags and JSON-LD
 - Facet configurations
 - Index naming and lifecycle management
+- `SitemapSkippedPathPrefixes` (optional, default `fr,es,de,jp,cn,br`): sitemap URLs whose first path segment is one of these legacy locale prefixes are not crawled. An empty value crawls everything. `fr-ca` and `en-us` URLs are never matched.
+
+The crawler sends no cookies: the site sets a `locale` cookie on `/fr-ca/` pages and renders unprefixed URLs in that cookie's language, so a shared cookie would index French titles under English URLs (DFDMVP-2279).
 
 ## Functions
 
@@ -187,6 +190,7 @@ These values need to be set in the Azure Function configuration (environment var
     "pageContentExpression": "",
     "CrawlerMaxConcurrency": 3,
     "CrawlerMaxRetries": 3,
+    "SitemapSkippedPathPrefixes": "fr,es,de,jp,cn,br",
     "ContentTypeFacetName": "facet_Content_Type_bltedec8785cf776886",
     "EventTypeFacetName": "facet_Event_Type_blta4cbd29d70185dba",
     "EventFacetValue": "facet_Event_blt3464588e70baf655",
