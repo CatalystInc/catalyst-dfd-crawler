@@ -53,6 +53,27 @@ namespace AzureFunctions.Indexer
             && minimum >= 0
                 ? minimum
                 : DefaultMinDocuments;
+
+        /// <summary>
+        /// Default for 'OldIndexDeleteDelaySeconds'. Azure AI Search can take up to 10 seconds
+        /// to apply an alias change everywhere; searches that still resolve the alias to the
+        /// old index fail with 404 if it is already deleted.
+        /// </summary>
+        public const int DefaultOldIndexDeleteDelaySeconds = 15;
+
+        /// <summary>Upper bound for 'OldIndexDeleteDelaySeconds', so a typo can't eat the run's time.</summary>
+        public const int MaxOldIndexDeleteDelaySeconds = 120;
+
+        /// <summary>
+        /// Reads the wait between switching the alias and deleting the old index (whole seconds,
+        /// 0 = no wait); the default when missing, invalid, negative or over the maximum.
+        /// </summary>
+        public static TimeSpan ParseOldIndexDeleteDelay(string? value) =>
+            TimeSpan.FromSeconds(
+                int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var seconds)
+                && seconds >= 0 && seconds <= MaxOldIndexDeleteDelaySeconds
+                    ? seconds
+                    : DefaultOldIndexDeleteDelaySeconds);
     }
 
     /// <summary>
