@@ -43,6 +43,7 @@ namespace AzureFunctions.Indexer
 		private readonly string _searchIndexAlias;
 		private readonly string _searchApiKey;
 		private readonly bool _deleteOldIndexOnSwap;
+		private readonly TimeSpan _oldIndexDeleteDelay;
 		private readonly double _swapMinDocumentRatio;
 		private readonly long _swapMinDocuments;
 		private readonly HashSet<string> _supportedLocales;
@@ -85,6 +86,7 @@ namespace AzureFunctions.Indexer
 			_searchIndexAlias = configuration["SearchIndexAlias"] ?? throw new ArgumentNullException(nameof(configuration), "SearchIndexAlias is missing");
 			_searchIndexBaseName = configuration["SearchIndexBaseName"] ?? throw new ArgumentNullException(nameof(configuration), "SearchIndexBaseName is missing");
 			_deleteOldIndexOnSwap = bool.Parse(Environment.GetEnvironmentVariable("DeleteOldIndexOnSwap") ?? "false");
+			_oldIndexDeleteDelay = IndexSwapGuard.ParseOldIndexDeleteDelay(configuration["OldIndexDeleteDelaySeconds"]);
 			_swapMinDocumentRatio = IndexSwapGuard.ParseRatio(configuration["SwapMinDocumentRatio"]);
 			_swapMinDocuments = IndexSwapGuard.ParseMinDocuments(configuration["SwapMinDocuments"]);
 			_supportedLocales = PageLocale.ParseLocales(configuration["SupportedLocales"] ?? PageLocale.DefaultSupportedLocales);
@@ -945,6 +947,13 @@ namespace AzureFunctions.Indexer
 			{
 				_logger.LogInformation("DeleteOldIndexOnSwap is set to false. Skipping deletion of old index.");
 				return;
+			}
+			if (_oldIndexDeleteDelay > TimeSpan.Zero)
+			{
+				// The alias change takes up to ~10 s to reach every search replica; until
+				// then some searches still go to the old index and would get a 404.
+				_logger.LogInformation("Waiting {Seconds} s for the alias change to propagate before deleting old index {IndexName}", _oldIndexDeleteDelay.TotalSeconds, indexName);
+				await Task.Delay(_oldIndexDeleteDelay);
 			}
 			try
 			{

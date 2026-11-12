@@ -40,6 +40,24 @@ public class IndexSwapGuardTests
         Assert.Equal(expected, IndexSwapGuard.ParseRatio(value));
 
     [Theory]
+    [InlineData(null, 15)]
+    [InlineData("", 15)]
+    [InlineData("30", 30)]
+    [InlineData("0", 0)]
+    [InlineData("120", 120)]
+    [InlineData("121", 15)]
+    [InlineData("-5", 15)]
+    [InlineData("1.5", 15)]
+    [InlineData("abc", 15)]
+    public void Parses_the_old_index_delete_delay(string? value, int expectedSeconds) =>
+        Assert.Equal(TimeSpan.FromSeconds(expectedSeconds), IndexSwapGuard.ParseOldIndexDeleteDelay(value));
+
+    [Fact]
+    public void Waits_longer_than_azure_takes_to_apply_an_alias_change() =>
+        // Azure AI Search can take up to 10 seconds to apply an alias update.
+        Assert.True(IndexSwapGuard.ParseOldIndexDeleteDelay(null) > TimeSpan.FromSeconds(10));
+
+    [Theory]
     [InlineData(null, 1L)]
     [InlineData("50", 50L)]
     [InlineData("0", 0L)]

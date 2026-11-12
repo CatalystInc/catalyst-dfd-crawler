@@ -98,6 +98,7 @@ The system is highly configurable through environment variables and settings:
 - Facet configurations
 - Index naming and lifecycle management
 - `SwapMinDocumentRatio` (optional, default `0.8`) and `SwapMinDocuments` (optional, default `1`): the swap guard's thresholds. For an intended large shrink, set `SwapMinDocumentRatio` to `0` for one run, then restore it.
+- `OldIndexDeleteDelaySeconds` (optional, default `15`, 0-120): with `DeleteOldIndexOnSwap` set to `true`, how long to wait after switching the alias before deleting the old index. Azure AI Search can take up to 10 seconds to apply an alias change everywhere, and searches that still reach the old index fail with 404 once it is deleted. `0` deletes right away.
 - `SitemapSkippedPathPrefixes` (optional, default `fr,es,de,jp,cn,br`): sitemap URLs whose first path segment is one of these legacy locale prefixes are not crawled. An empty value crawls everything. `fr-ca` and `en-us` URLs are never matched.
 
 - `SupportedLocales` (optional, default `en-us,fr-ca`) and `DefaultLocale` (optional, default `en-us`): see Locale below.
@@ -222,6 +223,7 @@ These values need to be set in the Azure Function configuration (environment var
     "SearchIndexAlias": "catalyst-az-poc-alias",
     "SearchIndexBaseName": "catalyst-az-poc",
     "DeleteOldIndexOnSwap": "true",
+    "OldIndexDeleteDelaySeconds": "15",
     "SearchApiKey": "[your search api key]",
     "CrawlerUserAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     "pageContentExpression": "",
