@@ -76,6 +76,7 @@ The web crawler system is designed to efficiently index web content into Azure C
    - Existing core continues serving searches
 3. Completion:
    - "End" swap command triggers index switch
+   - Swap guard: the alias is only switched when the new index has at least `SwapMinDocuments` documents and at least `SwapMinDocumentRatio` of the live index's count. Otherwise the run fails, the alias stays on the live index, and nothing is deleted. The run also stops before crawling, without deleting anything, when the live index is missing or is the index to rebuild, and when the schema clone fails. With a sitemap index as the root, all child sitemaps are crawled (one at a time) into one new index, and the swap happens once.
    - Search alias updated to new core
    - Old index optionally deleted
 
@@ -96,6 +97,31 @@ The system is highly configurable through environment variables and settings:
 - Field mappings for meta tags and JSON-LD
 - Facet configurations
 - Index naming and lifecycle management
+- `SwapMinDocumentRatio` (optional, default `0.8`) and `SwapMinDocuments` (optional, default `1`): the swap guard's thresholds. For an intended large shrink, set `SwapMinDocumentRatio` to `0` for one run, then restore it.
+- `OldIndexDeleteDelaySeconds` (optional, default `15`, 0-120): with `DeleteOldIndexOnSwap` set to `true`, how long to wait after switching the alias before deleting the old index. Azure AI Search can take up to 10 seconds to apply an alias change everywhere, and searches that still reach the old index fail with 404 once it is deleted. `0` deletes right away.
+- `SitemapSkippedPathPrefixes` (optional, default `fr,es,de,jp,cn,br`): sitemap URLs whose first path segment is one of these legacy locale prefixes are not crawled. An empty value crawls everything. `fr-ca` and `en-us` URLs are never matched.
+
+- `SupportedLocales` (optional, default `en-us,fr-ca`) and `DefaultLocale` (optional, default `en-us`): see Locale below.
+
+The crawler sends no cookies: the site sets a `locale` cookie on `/fr-ca/` pages and renders unprefixed URLs in that cookie's language, so a shared cookie would index French titles under English URLs (DFDMVP-2279).
+
+### Locale
+
+Every document gets a `locale` field in the search filter's format (`en-us`, `fr-ca`), taken from the page's URL after redirects: `/fr-ca/...` is `fr-ca` (any locale in `SupportedLocales` works the same way), and everything else, including Cvent events, is `DefaultLocale`. It is written last, so it replaces the value from the `og:locale` meta mapping (the site always renders `en_US` there); that `MetaFieldMappings` entry can be removed.
+
+Documents also get `alternate_locales`: the other supported languages the page exists in, from the sitemap's `<xhtml:link rel="alternate" hreflang="...">` elements (empty when the sitemap lists none). The site's French search uses it to show English pages only when they have no French version (`locale eq 'fr-ca' or not alternate_locales/any(l: l eq 'fr-ca')`). The field is a filterable string collection; when the live index doesn't have it yet, the schema clone adds it, so it exists after one run. After the crawl, and before the swap, a language stays in a page's `alternate_locales` only if that language's URL was indexed in the same run, so a dead or failed French version never hides the English page from French search. A sitemap URL that redirects into another language (e.g. a `/fr-ca/` URL that lands on an English page) is skipped like a dead link. The run logs how many entries list alternates and any `hreflang` codes that aren't supported locales.
+
+### Sitemap URLs
+
+Before crawling, `#fragments` are dropped (the sitemap's `https://www.catalyst.org/#` entries are the homepage) and duplicates removed. A URL that ends on a 404/410 or on the site's `/not-found` page is skipped once, without retries, and logged as `Skipping sitemap URL`.
+
+### Tests
+
+```
+dotnet test Tests/AzureFunctions.Tests/AzureFunctions.Tests.csproj
+```
+
+The test project is deliberately not in `WebCrawler.sln`: the deploy workflows build the solution into `./output` and deploy that folder. The workflows run these tests before building and deploying.
 
 ## Functions
 
@@ -122,6 +148,21 @@ Set source to source sitemap url and urls to the list of urls to index when inde
     "https://www.catalyst.org/2020/08/10/racism-gender-pay-gap-women/",
     "https://www.catalyst.org/2021/04/27/future-of-work-summit-europe-2021-takeaways/"
   ]
+}
+```
+
+Optionally add `alternates`, the language versions per URL (as the sitemap's hreflang links give them), to fill `alternate_locales`. Without it, a crawled document keeps the `alternate_locales` value it already has.
+
+```json
+{
+  "source": "https://www.catalyst.org/sitemap.xml",
+  "urls": ["https://www.catalyst.org/pages/terms-of-use"],
+  "alternates": {
+    "https://www.catalyst.org/pages/terms-of-use": [
+      { "hreflang": "en-us", "href": "https://www.catalyst.org/pages/terms-of-use" },
+      { "hreflang": "fr-ca", "href": "https://www.catalyst.org/fr-ca/pages/terms-of-use" }
+    ]
+  }
 }
 ```
 
@@ -182,11 +223,15 @@ These values need to be set in the Azure Function configuration (environment var
     "SearchIndexAlias": "catalyst-az-poc-alias",
     "SearchIndexBaseName": "catalyst-az-poc",
     "DeleteOldIndexOnSwap": "true",
+    "OldIndexDeleteDelaySeconds": "15",
     "SearchApiKey": "[your search api key]",
     "CrawlerUserAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     "pageContentExpression": "",
     "CrawlerMaxConcurrency": 3,
     "CrawlerMaxRetries": 3,
+    "SitemapSkippedPathPrefixes": "fr,es,de,jp,cn,br",
+    "SwapMinDocumentRatio": "0.8",
+    "SwapMinDocuments": "1",
     "ContentTypeFacetName": "facet_Content_Type_bltedec8785cf776886",
     "EventTypeFacetName": "facet_Event_Type_blta4cbd29d70185dba",
     "EventFacetValue": "facet_Event_blt3464588e70baf655",

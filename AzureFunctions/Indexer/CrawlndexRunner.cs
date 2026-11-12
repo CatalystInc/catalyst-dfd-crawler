@@ -15,6 +15,8 @@ namespace AzureFunctions.Indexer
 		private readonly HttpClient _httpClient;
 		private readonly string _sitemapsRootUrl;
 		private readonly PageCrawlerQueue _queue;
+		private readonly HashSet<string> _skippedPathPrefixes;
+		private readonly HashSet<string> _supportedLocales;
 
         /// <summary>
         /// Initializes a new instance of the CrawlIndexRunner class.
@@ -30,6 +32,9 @@ namespace AzureFunctions.Indexer
 			_sitemapsRootUrl = configuration["SitemapsRootUrl"] ?? throw new ArgumentNullException(nameof(configuration), "SitemapsRootUrl configuration is missing");
 			_httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
 			_queue = queue;
+			_skippedPathPrefixes = SitemapUrlFilter.ParsePrefixes(
+				configuration["SitemapSkippedPathPrefixes"] ?? SitemapUrlFilter.DefaultSkippedPathPrefixes);
+			_supportedLocales = PageLocale.ParseLocales(configuration["SupportedLocales"] ?? PageLocale.DefaultSupportedLocales);
 
         }
 
@@ -37,8 +42,12 @@ namespace AzureFunctions.Indexer
 		/// Processes a sitemap or sitemap index at the given URL.
 		/// </summary>
 		/// <param name="url">The URL of the sitemap to process.</param>
+		/// <param name="isRoot">
+		/// True for the configured root sitemap. Only the root builds a new index and swaps it in,
+		/// once, after every child sitemap of a sitemap index has been crawled into it.
+		/// </param>
 		/// <returns>A task representing the asynchronous operation.</returns>
-		public async Task ProcessSitemapAsync(string url)
+		public async Task ProcessSitemapAsync(string url, bool isRoot = true)
 		{
 			if (string.IsNullOrWhiteSpace(url))
 			{
@@ -52,7 +61,10 @@ namespace AzureFunctions.Indexer
 				var xmlContent = await _httpClient.GetStringAsync(url);
 				var doc = XDocument.Parse(xmlContent);
 
-                await _queue.StartIndexSwapAsync();
+                if (isRoot)
+                {
+                    await _queue.StartIndexSwapAsync();
+                }
 
                 XNamespace ns = doc.Root?.GetDefaultNamespace() ?? XNamespace.None;
 
@@ -65,14 +77,19 @@ namespace AzureFunctions.Indexer
 						break;
 					case "urlset":
 						_logger.LogInformation("Processing urlset: {Url}", url);
-						List<string> urls = ExtractUrlsFromSitemap(doc, ns);
-						await ProcessSitemapUrlsAsync(url, urls);
+						var entries = SitemapParser.ParseUrlset(doc);
+						List<string> urls = ExtractUrlsFromSitemap(entries);
+						LogAlternatesSummary(entries);
+						await ProcessSitemapUrlsAsync(url, urls, SitemapUrlFilter.AlternatesByUrl(entries));
 						break;
 					default:
 						throw new FormatException("The XML does not appear to be a valid sitemap or sitemap index.");
 				}
 
-                await _queue.CompleteIndexSwapAsync();
+                if (isRoot)
+                {
+                    await _queue.CompleteIndexSwapAsync();
+                }
             }
 			catch (HttpRequestException e)
 			{
@@ -85,6 +102,12 @@ namespace AzureFunctions.Indexer
 			catch (FormatException e)
 			{
 				_logger.LogError(e, "Invalid sitemap format: {Url}. Error: {message}", url, e.Message);
+			}
+			catch (IndexSwapAbortedException e)
+			{
+				// The live index was kept. Rethrow so the invocation shows as failed and can alert.
+				_logger.LogError(e, "Index swap aborted for sitemap {Url}: {message}", url, e.Message);
+				throw;
 			}
 			catch (Exception e)
 			{
@@ -106,34 +129,64 @@ namespace AzureFunctions.Indexer
 				return;
 			}
 
-			var sitemapTasks = doc.Root.Elements(ns + "sitemap")
+			var childSitemapUrls = doc.Root.Elements(ns + "sitemap")
 				.Select(sitemapElement => sitemapElement.Element(ns + "loc"))
 				.Where(locElement => locElement != null)
-				.Select(locElement => ProcessSitemapAsync(locElement.Value.Trim()));
+				.Select(locElement => locElement!.Value.Trim());
 
-			await Task.WhenAll(sitemapTasks);
+			// One at a time, into the index the root is building: the root swaps once at the
+			// end, and the site sees the usual crawl concurrency rather than a multiple of it.
+			foreach (var childSitemapUrl in childSitemapUrls)
+			{
+				await ProcessSitemapAsync(childSitemapUrl, isRoot: false);
+			}
 		}
 
 		/// <summary>
-		/// Extracts URLs from a sitemap document.
+		/// Logs how many entries list language alternates, and hreflang codes that are ignored
+		/// because they aren't supported locales (e.g. language-only 'fr'), so a sitemap whose
+		/// alternates can't be used doesn't go unnoticed.
 		/// </summary>
-		/// <param name="doc">The XDocument representing the sitemap.</param>
-		/// <param name="ns">The XML namespace of the document.</param>
-		/// <returns>A list of URLs extracted from the sitemap.</returns>
-		private List<string> ExtractUrlsFromSitemap(XDocument doc, XNamespace ns)
+		private void LogAlternatesSummary(IReadOnlyList<SitemapEntry> entries)
 		{
-			if (doc.Root == null)
+			var withAlternates = entries.Count(entry => entry.Alternates.Count > 0);
+			_logger.LogInformation("Sitemap lists language alternates for {WithAlternates} of {Total} entries", withAlternates, entries.Count);
+
+			var ignored = entries
+				.SelectMany(entry => entry.Alternates)
+				.Select(alternate => PageLocale.Normalize(alternate.Hreflang))
+				.Where(hreflang => hreflang != "x-default" && !_supportedLocales.Contains(hreflang))
+				.Distinct()
+				.ToList();
+			if (ignored.Count > 0)
 			{
-				_logger.LogError("Invalid sitemap: Root element is missing.");
-				return new List<string>();
+				_logger.LogWarning("Ignoring hreflang values that aren't supported locales: {Hreflangs}", string.Join(",", ignored));
+			}
+		}
+
+		/// <summary>
+		/// The URLs to crawl from a sitemap's entries: without #fragments, duplicates or
+		/// skipped legacy prefixes.
+		/// </summary>
+		/// <param name="entries">The sitemap's &lt;url&gt; entries.</param>
+		/// <returns>A list of URLs extracted from the sitemap.</returns>
+		private List<string> ExtractUrlsFromSitemap(IReadOnlyList<SitemapEntry> entries)
+		{
+			var locs = entries.Select(entry => entry.Url).ToList();
+
+			var urls = SitemapUrlFilter.NormalizeAndDedupe(locs);
+			if (urls.Count < locs.Count)
+			{
+				_logger.LogInformation("Removed {DuplicateCount} duplicate sitemap URLs (after dropping #fragments)", locs.Count - urls.Count);
 			}
 
-			return doc.Root.Elements(ns + "url")
-				.Select(urlElement => urlElement.Element(ns + "loc"))
-				.Where(locElement => locElement != null)
-				.Select(locElement => locElement.Value.Trim())
-				.Where(url => !string.IsNullOrWhiteSpace(url))
-				.ToList();
+			var skipped = urls.RemoveAll(url => SitemapUrlFilter.HasSkippedPrefix(url, _skippedPathPrefixes));
+			if (skipped > 0)
+			{
+				_logger.LogInformation("Skipped {SkippedCount} sitemap URLs under the path prefixes {Prefixes}", skipped, string.Join(",", _skippedPathPrefixes));
+			}
+
+			return urls;
 		}
 
 		/// <summary>
@@ -141,8 +194,9 @@ namespace AzureFunctions.Indexer
 		/// </summary>
 		/// <param name="sitemapSource">The source URL of the sitemap.</param>
 		/// <param name="urls">The list of URLs to process.</param>
+		/// <param name="alternates">The language alternates the sitemap lists per URL.</param>
 		/// <returns>A task representing the asynchronous operation.</returns>
-		private async Task ProcessSitemapUrlsAsync(string sitemapSource, List<string> urls)
+		private async Task ProcessSitemapUrlsAsync(string sitemapSource, List<string> urls, Dictionary<string, List<SitemapAlternate>> alternates)
 		{
 			if (string.IsNullOrWhiteSpace(sitemapSource))
 			{
@@ -158,7 +212,7 @@ namespace AzureFunctions.Indexer
 
 			_logger.LogInformation("Processing {UrlCount} URLs from sitemap: {SitemapSource}", urls.Count, sitemapSource);
 
-			var crawlRequest = new CrawlRequest() { Source = sitemapSource, Urls = urls };
+			var crawlRequest = new CrawlRequest() { Source = sitemapSource, Urls = urls, Alternates = alternates };
 
 			await _queue.CrawlPagesAsync(crawlRequest);
 		}

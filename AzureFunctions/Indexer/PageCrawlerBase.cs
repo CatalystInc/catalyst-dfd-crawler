@@ -4,6 +4,7 @@ using Azure.Search.Documents.Indexes;
 using Azure.Search.Documents.Indexes.Models;
 using Azure.Search.Documents.Models;
 using AzureFunctions.Cvent;
+using AzureFunctions.Cvent.Models;
 using AzureFunctions.Models;
 using AzureSearchCrawler;
 using Google.Protobuf.WellKnownTypes;
@@ -42,6 +43,11 @@ namespace AzureFunctions.Indexer
 		private readonly string _searchIndexAlias;
 		private readonly string _searchApiKey;
 		private readonly bool _deleteOldIndexOnSwap;
+		private readonly TimeSpan _oldIndexDeleteDelay;
+		private readonly double _swapMinDocumentRatio;
+		private readonly long _swapMinDocuments;
+		private readonly HashSet<string> _supportedLocales;
+		private readonly string _defaultLocale;
 		private string _currentIndexName;
 		private string _newIndexName;
 		private string _eventFacetValue;
@@ -66,7 +72,7 @@ namespace AzureFunctions.Indexer
             _loggerFactory = loggerFactory;
 
             _logger = loggerFactory.CreateLogger<PageCrawlerBase>();
-			_httpClient = new HttpClient();
+			_httpClient = new HttpClient(CreatePageHandler());
 
 			var userAgent = configuration["UserAgent"] ?? "DefaultCrawlerBot/1.0";
 			_httpClient.DefaultRequestHeaders.Add("User-Agent", userAgent);
@@ -80,6 +86,11 @@ namespace AzureFunctions.Indexer
 			_searchIndexAlias = configuration["SearchIndexAlias"] ?? throw new ArgumentNullException(nameof(configuration), "SearchIndexAlias is missing");
 			_searchIndexBaseName = configuration["SearchIndexBaseName"] ?? throw new ArgumentNullException(nameof(configuration), "SearchIndexBaseName is missing");
 			_deleteOldIndexOnSwap = bool.Parse(Environment.GetEnvironmentVariable("DeleteOldIndexOnSwap") ?? "false");
+			_oldIndexDeleteDelay = IndexSwapGuard.ParseOldIndexDeleteDelay(configuration["OldIndexDeleteDelaySeconds"]);
+			_swapMinDocumentRatio = IndexSwapGuard.ParseRatio(configuration["SwapMinDocumentRatio"]);
+			_swapMinDocuments = IndexSwapGuard.ParseMinDocuments(configuration["SwapMinDocuments"]);
+			_supportedLocales = PageLocale.ParseLocales(configuration["SupportedLocales"] ?? PageLocale.DefaultSupportedLocales);
+			_defaultLocale = PageLocale.Normalize(configuration["DefaultLocale"] ?? PageLocale.DefaultLocale);
 
             _contentTypeFacetName = configuration["ContentTypeFacetName"] ?? throw new ArgumentNullException(nameof(configuration), "ContentTypeFacetName is missing");
             _eventFacetValue = configuration["EventFacetValue"] ?? throw new ArgumentNullException(nameof(configuration), "EventFacetValue is missing");
@@ -100,6 +111,15 @@ namespace AzureFunctions.Indexer
 
 			_logger.LogInformation("Page Crawler initialized with User-Agent: {UserAgent}, MaxConcurrency: {MaxConcurrency}, MaxRetries: {MaxRetries}", userAgent, _maxConcurrency, _maxRetries);
         }
+
+		/// <summary>
+		/// The handler for page requests. It follows redirects but keeps no cookies
+		/// (DFDMVP-2279): one client crawls the whole sitemap, and the site sets
+		/// 'locale=fr-ca' on any /fr-ca/ page, including redirect targets. With cookies, that
+		/// value is sent on every later request and the site renders unprefixed URLs in French.
+		/// </summary>
+		public static HttpMessageHandler CreatePageHandler() =>
+			new SocketsHttpHandler { UseCookies = false, AllowAutoRedirect = true };
 
 		private async Task CreateAliasAsync(string indexName)
 		{
@@ -197,7 +217,7 @@ namespace AzureFunctions.Indexer
 		/// <param name="source">The source of the URL.</param>
 		/// <returns>A task that represents the asynchronous operation. The task result contains the search document.</returns>
 		/// <exception cref="ArgumentNullException">Thrown when url or source is null.</exception>
-		public async Task<SearchDocument> CrawlPageAsync(string url, string source)
+		public async Task<SearchDocument> CrawlPageAsync(string url, string source, IReadOnlyList<SitemapAlternate>? alternates = null)
 		{
 			ArgumentNullException.ThrowIfNull(url);
 			ArgumentNullException.ThrowIfNull(source);
@@ -219,6 +239,19 @@ namespace AzureFunctions.Indexer
                 }
 
                 using var response = await _httpClient.GetAsync(fetchUrl);
+
+				// After redirects: a missing page is skipped without retries.
+				var finalUri = response.RequestMessage?.RequestUri;
+				if (CrawlResponse.IsDeadLink(response.StatusCode, finalUri))
+				{
+					throw new DeadLinkException(url, finalUri, response.StatusCode);
+				}
+				// A /fr-ca/ URL that redirects to an English page (or the reverse) has no page
+				// in its own language; the target is indexed through its own sitemap entry.
+				if (PageLocale.IsCrossLocaleRedirect(url, finalUri, _supportedLocales, _defaultLocale))
+				{
+					throw new DeadLinkException(url, finalUri!);
+				}
 				response.EnsureSuccessStatusCode();
 
 				var html = await response.Content.ReadAsStringAsync();
@@ -305,7 +338,25 @@ namespace AzureFunctions.Indexer
 					_logger.LogWarning(ex, "Error processing JSON-LD for {Url}. Error message: {message}", url, ex.Message);
 				}
 
+				// Set last, so no meta tag or JSON-LD mapping (e.g. og:locale, always en_US
+				// on the site) overrides it: the language follows the URL the page came from.
+				var locale = PageLocale.FromUrl(finalUri?.ToString() ?? url, _supportedLocales, _defaultLocale);
+				searchDocument["locale"] = locale;
+				// The other languages the sitemap lists for this page (empty when it has none),
+				// so French search can leave out English pages that have a French version.
+				// Checked again after the crawl (ReconcileAlternateLocalesAsync). Without
+				// sitemap data (an HTTP-triggered crawl) the field is left as it is.
+				if (alternates != null)
+				{
+					searchDocument[PageLocale.AlternateLocalesField] =
+						PageLocale.Alternates(locale, alternates.Select(alternate => alternate.Hreflang), _supportedLocales);
+				}
+
 				return searchDocument;
+			}
+			catch (DeadLinkException)
+			{
+				throw;
 			}
 			catch (Exception ex)
 			{
@@ -344,12 +395,16 @@ namespace AzureFunctions.Indexer
 					new ParallelOptions { MaxDegreeOfParallelism = _maxConcurrency },
 					async (url, ct) =>
 					{
-						var searchDocument = await ProcessUrlWithRetryAsync(url, crawlRequest.Source, ct);
+						List<SitemapAlternate>? alternates = null;
+						crawlRequest.Alternates?.TryGetValue(url, out alternates);
+						var searchDocument = await ProcessUrlWithRetryAsync(url, crawlRequest.Source, alternates, ct);
 						await Task.Delay(100, ct); // Slow down to prevent rate limiting
 						results.Add(searchDocument);
 					});
 
 				_logger.LogInformation("Crawled {Count} pages from source {Source}", results.Count, crawlRequest.Source);
+
+				await ReconcileAlternateLocalesAsync(crawlRequest, results.ToList());
 			}
 			else
 			{
@@ -360,6 +415,23 @@ namespace AzureFunctions.Indexer
 		public async Task StartIndexSwapAsync()
 		{
 			_logger.LogInformation("Starting index swap process");
+
+			// Check before deleting anything: the index to rebuild must not be the live one,
+			// and the live index must exist, since its schema is copied below.
+			if (string.Equals(_newIndexName, _currentIndexName, StringComparison.OrdinalIgnoreCase))
+			{
+				throw new IndexSwapAbortedException(
+					$"The index to rebuild, {_newIndexName}, is the live index; nothing was deleted. Point {_searchIndexAlias} at {_searchIndexBaseName}_0 or {_searchIndexBaseName}_1.");
+			}
+			try
+			{
+				await _searchIndexClient.GetIndexAsync(_currentIndexName);
+			}
+			catch (RequestFailedException ex) when (ex.Status == 404)
+			{
+				throw new IndexSwapAbortedException(
+					$"The live index {_currentIndexName} does not exist, so there is no schema to copy; {_newIndexName} was not deleted. Point {_searchIndexAlias} at an existing index.", ex);
+			}
 
 			try
 			{
@@ -376,8 +448,13 @@ namespace AzureFunctions.Indexer
 				_logger.LogInformation($"Index {_newIndexName} does not exist. Proceeding with creation.");
 			}
 
-			// Clone the existing index schema
-			await CloneIndexSchemaAsync(_currentIndexName, _newIndexName);
+			// Clone the existing index schema. Without it every upload fails and the run
+			// would end with an empty index, so stop here and leave the live index alone.
+			if (!await CloneIndexSchemaAsync(_currentIndexName, _newIndexName))
+			{
+				throw new IndexSwapAbortedException(
+					$"Could not create {_newIndexName} from the schema of {_currentIndexName}; the crawl was not run and {_searchIndexAlias} still points to the live index.");
+			}
 
 			_logger.LogInformation($"New index {_newIndexName} created");
 		}
@@ -477,15 +554,85 @@ namespace AzureFunctions.Indexer
 			}
 		}
 
-		async Task<SearchDocument> ProcessUrlWithRetryAsync(string url, string source, CancellationToken cancellationToken)
+		/// <summary>
+		/// After the crawl: keeps a language in a page's alternate_locales only when that
+		/// language's URL was indexed. A French version that was dead, failed, redirected
+		/// elsewhere or wasn't in the sitemap would otherwise hide the English page from
+		/// French search. Runs before the swap, so search never sees the unchecked values.
+		/// </summary>
+		private async Task ReconcileAlternateLocalesAsync(CrawlRequest crawlRequest, IReadOnlyList<SearchDocument> results)
+		{
+			if (crawlRequest.Alternates == null || crawlRequest.Alternates.Count == 0)
+			{
+				return;
+			}
+
+			var indexed = results
+				.Where(document => !document.ContainsKey("error"))
+				.Select(document => document.TryGetValue("url", out var url) ? url?.ToString() : null)
+				.Where(url => url != null)
+				.Select(url => url!)
+				.ToHashSet(StringComparer.Ordinal);
+
+			var corrected = 0;
+			foreach (var document in results.Where(document => !document.ContainsKey("error")))
+			{
+				var url = document["url"]?.ToString();
+				if (url == null
+					|| !crawlRequest.Alternates.TryGetValue(url, out var alternates)
+					|| alternates.Count == 0
+					|| !document.TryGetValue(PageLocale.AlternateLocalesField, out var written))
+				{
+					continue;
+				}
+
+				var verified = PageLocale.VerifiedAlternates(document["locale"]?.ToString() ?? _defaultLocale, alternates, indexed, _supportedLocales);
+				if (written is IEnumerable<string> current && current.SequenceEqual(verified))
+				{
+					continue;
+				}
+
+				try
+				{
+					await _searchClient.MergeDocumentsAsync(new[]
+					{
+						new SearchDocument { ["id"] = document["id"], [PageLocale.AlternateLocalesField] = verified },
+					});
+					corrected++;
+				}
+				catch (Exception ex)
+				{
+					_logger.LogWarning(ex, "Could not correct {Field} for {Url}", PageLocale.AlternateLocalesField, url);
+				}
+			}
+
+			if (corrected > 0)
+			{
+				_logger.LogInformation("Removed alternates that weren't indexed from {Count} documents", corrected);
+			}
+		}
+
+		async Task<SearchDocument> ProcessUrlWithRetryAsync(string url, string source, IReadOnlyList<SitemapAlternate>? alternates, CancellationToken cancellationToken)
 		{
 			for (int attempt = 1; attempt <= _maxRetries; attempt++)
 			{
 				try
 				{
-					var searchDocument = await CrawlPageAsync(url, source);
+					var searchDocument = await CrawlPageAsync(url, source, alternates);
 					await IndexSearchDocumentAsync(searchDocument, cancellationToken);
 					return searchDocument;
+				}
+				catch (DeadLinkException ex)
+				{
+					// The sitemap lists a page that doesn't exist; retrying won't change that.
+					_logger.LogWarning("Skipping sitemap URL: {message}", ex.Message);
+					return new SearchDocument
+					{
+						["id"] = GenerateUrlUniqueId(url),
+						["url"] = url,
+						["error"] = ex.Message,
+						["source"] = source
+					};
 				}
 				catch (Exception ex) when (ex is not OperationCanceledException)
 				{
@@ -536,6 +683,8 @@ namespace AzureFunctions.Indexer
 						{
 							var eventDetails = dataMapper.ToEventDetailsModel(eventEntry);
 
+							if (excludeEventFromSearch(eventDetails)) continue;
+
 							var searchDocument = new SearchDocument
 							{
 								["id"] = eventDetails.Id,
@@ -547,7 +696,9 @@ namespace AzureFunctions.Indexer
 								["textContent"] = eventDetails.TextDescription,
 								[_contentTypeFacetName] = new List<string> { _eventFacetValue },
 								[_tagFacetName] = eventDetails.Tags,
-								[_dateFacetName] = eventDetails.StartDate
+								[_dateFacetName] = eventDetails.StartDate,
+								// Events are listed in English, like unprefixed pages.
+								["locale"] = _defaultLocale
                             };
 
 							if (!string.IsNullOrEmpty(eventDetails.EventTypeFacet))
@@ -604,6 +755,16 @@ namespace AzureFunctions.Indexer
 				document["error"] = ex.Message;
 				return document;
             }
+        }
+
+		bool excludeEventFromSearch(EventDetailsModel model)
+		{
+			return model.Tags != null &&
+				model.Tags.Any(t =>
+					!string.IsNullOrEmpty(t) &&
+					(t.Equals("invitation-only", StringComparison.OrdinalIgnoreCase) ||
+					t.Equals("canceled", StringComparison.OrdinalIgnoreCase) ||
+					t.Equals("test", StringComparison.OrdinalIgnoreCase)));
         }
 
         bool TryConvertValue(JToken token, string targetType, out object result)
@@ -787,6 +948,13 @@ namespace AzureFunctions.Indexer
 				_logger.LogInformation("DeleteOldIndexOnSwap is set to false. Skipping deletion of old index.");
 				return;
 			}
+			if (_oldIndexDeleteDelay > TimeSpan.Zero)
+			{
+				// The alias change takes up to ~10 s to reach every search replica; until
+				// then some searches still go to the old index and would get a 404.
+				_logger.LogInformation("Waiting {Seconds} s for the alias change to propagate before deleting old index {IndexName}", _oldIndexDeleteDelay.TotalSeconds, indexName);
+				await Task.Delay(_oldIndexDeleteDelay);
+			}
 			try
 			{
 				await _searchIndexClient.DeleteIndexAsync(indexName);
@@ -803,6 +971,73 @@ namespace AzureFunctions.Indexer
 				// throw;
 			}
 		}
+		/// <summary>
+		/// Throws <see cref="IndexSwapAbortedException"/> unless the new index has enough
+		/// documents to replace the live one (see <see cref="IndexSwapGuard"/>).
+		/// </summary>
+		private async Task EnsureNewIndexCanGoLiveAsync()
+		{
+			const int attempts = 6;
+			var delay = TimeSpan.FromSeconds(5);
+
+			long? liveCount = null;
+			long newCount = 0;
+			string? rejection = null;
+
+			try
+			{
+				// Null only when the live index is gone; any other failure aborts, since
+				// skipping the comparison could put a near-empty index live.
+				liveCount = await GetDocumentCountOrNullAsync(_currentIndexName);
+
+				// The count can trail the last uploads by a few seconds, so re-read it
+				// before giving up.
+				for (var attempt = 1; attempt <= attempts; attempt++)
+				{
+					newCount = (await _searchIndexClient.GetSearchClient(_newIndexName).GetDocumentCountAsync()).Value;
+					rejection = IndexSwapGuard.GetRejectionReason(newCount, liveCount, _swapMinDocumentRatio, _swapMinDocuments);
+					if (rejection == null || attempt == attempts)
+					{
+						break;
+					}
+					await Task.Delay(delay);
+				}
+			}
+			catch (Exception ex)
+			{
+				throw new IndexSwapAbortedException(
+					$"Could not count the documents in {_currentIndexName} or {_newIndexName}; {_searchIndexAlias} still points to {_currentIndexName}.", ex);
+			}
+
+			if (rejection != null)
+			{
+				throw new IndexSwapAbortedException(
+					$"Not switching {_searchIndexAlias} to {_newIndexName}: {rejection}. It still points to {_currentIndexName}. " +
+					"For an intended shrink, lower SwapMinDocumentRatio (0 turns the comparison off) for one run.");
+			}
+
+			_logger.LogInformation(
+				"New index {NewIndex} has {NewCount} documents (live index {LiveIndex}: {LiveCount}); switching the alias.",
+				_newIndexName, newCount, _currentIndexName, liveCount?.ToString() ?? "unknown");
+		}
+
+		/// <summary>
+		/// The index's document count, or null when the index doesn't exist. Other errors
+		/// are thrown (the SDK has already retried transient ones).
+		/// </summary>
+		private async Task<long?> GetDocumentCountOrNullAsync(string indexName)
+		{
+			try
+			{
+				return (await _searchIndexClient.GetSearchClient(indexName).GetDocumentCountAsync()).Value;
+			}
+			catch (RequestFailedException ex) when (ex.Status == 404)
+			{
+				_logger.LogWarning("The live index {Index} no longer exists; only the minimum document check applies.", indexName);
+				return null;
+			}
+		}
+
 		public async Task CompleteIndexSwapAsync()
 		{
 			_logger.LogInformation("Completing index swap process");
@@ -813,6 +1048,8 @@ namespace AzureFunctions.Indexer
 			}
 
 			string oldIndexName = _currentIndexName;
+
+			await EnsureNewIndexCanGoLiveAsync();
 
 			try
 			{
@@ -863,6 +1100,28 @@ namespace AzureFunctions.Indexer
 			}
 		}
 
+		/// <summary>
+		/// Adds the filterable alternate_locales field when the schema being copied doesn't have
+		/// it yet (indexes built before French search). Each run copies the live index, so after
+		/// one run every index has it.
+		/// </summary>
+		public static void EnsureAlternateLocalesField(IList<SearchField> fields)
+		{
+			if (fields.Any(field => string.Equals(field.Name, PageLocale.AlternateLocalesField, StringComparison.Ordinal)))
+			{
+				return;
+			}
+
+			fields.Add(new SearchField(PageLocale.AlternateLocalesField, SearchFieldDataType.Collection(SearchFieldDataType.String))
+			{
+				IsFilterable = true,
+				IsSearchable = false,
+				IsFacetable = false,
+				IsSortable = false,
+				IsHidden = false,
+			});
+		}
+
 		public async Task<bool> CloneIndexSchemaAsync(string sourceIndexName, string targetIndexName)
 		{
 			Console.WriteLine($"Cloning schema from '{sourceIndexName}' to '{targetIndexName}'");
@@ -880,6 +1139,7 @@ namespace AzureFunctions.Indexer
 					CorsOptions = sourceIndex.Value.CorsOptions,
 					VectorSearch = sourceIndex.Value.VectorSearch
 				};
+				EnsureAlternateLocalesField(newIndex.Fields);
 
 				// Add analyzers
 				if (sourceIndex.Value.Analyzers != null)
